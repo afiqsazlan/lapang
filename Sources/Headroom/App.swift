@@ -12,6 +12,7 @@ struct HeadroomApp: App {
     @StateObject private var monitor: Monitor
 
     init() {
+        CLI.runIfRequested()  // `headroom status` etc. print and exit before any UI starts
         // `Headroom --render out.png [--demo] [--light]` draws the full panel off-screen and exits.
         // --demo uses built-in sample data instead of this Mac's; --light forces the light appearance.
         let args = CommandLine.arguments

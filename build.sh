@@ -35,3 +35,12 @@ rm -rf "$DEST"
 cp -R "$APP" "$DEST"
 open "$DEST"
 echo "✓ installed $DEST"
+
+# the same binary is the `headroom` command (status, clean, …); link it where your shell finds it
+BIN_DIR="${HEADROOM_BIN_DIR:-$HOME/.local/bin}"
+if [ -d "$BIN_DIR" ]; then
+  ln -sfn "$DEST/Contents/MacOS/Headroom" "$BIN_DIR/headroom"
+  echo "✓ linked $BIN_DIR/headroom"
+else
+  echo "  to use the headroom command: ln -s \"$DEST/Contents/MacOS/Headroom\" /usr/local/bin/headroom"
+fi

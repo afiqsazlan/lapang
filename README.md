@@ -31,6 +31,20 @@ git clone https://github.com/afiqsazlan/headroom.git && cd headroom
 
 `build.sh` compiles a release build, installs `Headroom.app` into `~/Applications` and launches it. To have it start at login, tick **Open at login** in the panel's gear menu. Use `./build.sh --no-install` to only build `./build/Headroom.app`.
 
+## Command line, and agents
+
+The app binary is also a command. `build.sh` links it as `~/.local/bin/headroom` when that folder exists.
+
+```bash
+headroom status          # the panel as text
+headroom status --json   # the same as JSON
+headroom clean           # what would be cleaned; add --yes to do it (--only caches,processes,simulators)
+headroom kill-old-mcp    # every MCP server but the newest; add --yes to do it
+headroom quit "Figma"    # ask an app from Memory users to quit; add --yes to do it
+```
+
+Actions only print what they would do until you add `--yes`. That makes it safe to hand to a coding agent: a Claude Code session (including one you drive from your phone with Remote Control) can run `headroom status`, tell you what's going on, and run the action once you agree.
+
 ## Configuration
 
 Gear menu → **Edit config…** opens `~/.config/headroom/config.json`, creating it if needed. Every key is optional, and changes apply on the next refresh.
