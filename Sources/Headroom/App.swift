@@ -8,6 +8,7 @@ import SwiftUI
 
 @main
 struct HeadroomApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var monitor: Monitor
 
     init() {
@@ -18,7 +19,9 @@ struct HeadroomApp: App {
             let out = args[i + 1]
             Task { @MainActor in await renderPanel(to: out) }
         } else {
-            _monitor = StateObject(wrappedValue: Monitor())
+            let m = Monitor()
+            AppDelegate.monitor = m
+            _monitor = StateObject(wrappedValue: m)
         }
     }
 
