@@ -394,6 +394,13 @@ final class SizeStore: @unchecked Sendable {
         GrowthLog.append(.init(t: stored.measuredAt, sizes: fresh))
     }
 
+    /// Sample sizes for the demo render; kept in memory only, never saved.
+    func useDemo(_ demo: [String: Int64]) {
+        lock.lock(); defer { lock.unlock() }
+        sizes = demo
+        measuredAt = Date()
+    }
+
     func forget(_ path: String) {
         lock.lock(); defer { lock.unlock() }
         sizes[path] = nil

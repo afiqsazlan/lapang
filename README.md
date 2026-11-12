@@ -2,6 +2,8 @@
 
 A small macOS menu bar app that keeps an eye on what quietly fills up a developer's Mac, and lets you clear it in a click.
 
+<p align="center"><img src="docs/screenshot.png" width="380" alt="The Headroom panel: free disk space with fill rate and forecast, what grew since yesterday, memory, simulators, dev processes, Xcode build caches, package caches and a custom section"></p>
+
 The menu bar shows free disk space (`41G`) and adds a warning sign when space is low or filling fast. The label is kept narrow on purpose: on a notched MacBook, menu bar items that don't fit are silently hidden. If that happens anyway, open Headroom from Spotlight or Finder and the same panel appears in a normal window. The panel shows:
 
 - **Disk**: free space, a usage bar, and a chart for 24 hours or 7 days.
@@ -85,7 +87,11 @@ The section runs on every refresh, so keep it fast (well under a second).
 
 ## Development
 
-`Headroom --render out.png` draws the full panel off-screen with live data and exits. It's useful for checking layout without clicking around the menu bar.
+`Headroom --render out.png` draws the full panel off-screen with live data and exits. It's useful for checking layout without clicking around the menu bar. Add `--demo` to use built-in sample data and `--light` for the light appearance. The README screenshot is made with:
+
+```bash
+./build.sh --no-install && build/Headroom.app/Contents/MacOS/Headroom --render docs/screenshot.png --demo --light
+```
 
 ## License
 

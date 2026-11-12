@@ -12,7 +12,8 @@ struct HeadroomApp: App {
     @StateObject private var monitor: Monitor
 
     init() {
-        // `Headroom --render out.png` draws the full panel off-screen and exits.
+        // `Headroom --render out.png [--demo] [--light]` draws the full panel off-screen and exits.
+        // --demo uses built-in sample data instead of this Mac's; --light forces the light appearance.
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--render"), i + 1 < args.count {
             _monitor = StateObject(wrappedValue: Monitor(startTimer: false))
@@ -59,14 +60,22 @@ struct MenuLabel: View {
 @MainActor
 func renderPanel(to path: String) async {
     let m = Monitor(startTimer: false)
-    await m.refresh()
-    if SizeStore.shared.isDue, let s = m.snap {
+    let args = CommandLine.arguments
+    if args.contains("--demo") {
+        m.snap = Demo.snapshot()
+        m.updated = Date()
+        m.frozen = true
+    } else {
+        await m.refresh()
+    }
+    if !args.contains("--demo"), SizeStore.shared.isDue, let s = m.snap {
         let paths = s.measuredPaths
         await Task.detached { SizeStore.shared.measure(paths) }.value
         await m.refresh()
     }
     let root = Panel(scroll: false).environmentObject(m).background(Color(nsColor: .windowBackgroundColor))
     let view = NSHostingView(rootView: root)
+    if args.contains("--light") { view.appearance = NSAppearance(named: .aqua) }
     let size = view.fittingSize
     let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: .borderless,
                           backing: .buffered, defer: false)

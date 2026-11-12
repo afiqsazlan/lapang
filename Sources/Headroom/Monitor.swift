@@ -10,6 +10,8 @@ final class Monitor: ObservableObject {
     @Published var refreshing = false
     @Published var measuring = false
     @Published var message: String?
+    /// Set for the demo render: never replace the sample data with this Mac's.
+    var frozen = false
     private var timer: Timer?
     private var interval: TimeInterval = 60
     private var lastNotified: Date?
@@ -30,7 +32,7 @@ final class Monitor: ObservableObject {
     }
 
     func refresh() async {
-        if refreshing { return }
+        if refreshing || frozen { return }
         refreshing = true
         defer { refreshing = false }
         let previous = snap?.sections ?? []
