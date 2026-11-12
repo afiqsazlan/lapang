@@ -14,7 +14,8 @@ struct LapangApp: App {
     init() {
         CLI.runIfRequested()  // `lapang status` etc. print and exit before any UI starts
         // `Lapang --render out.png [--demo] [--light]` draws the full panel off-screen and exits.
-        // --demo uses built-in sample data instead of this Mac's; --light forces the light appearance.
+        // --demo uses built-in sample data instead of this Mac's; --light forces the light appearance;
+        // --pin-spike shows the latest pressure spike's culprits as if its slice were clicked.
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--render"), i + 1 < args.count {
             _monitor = StateObject(wrappedValue: Monitor(startTimer: false))
@@ -107,6 +108,7 @@ func renderPanel(to path: String) async {
     }
     .environmentObject(m)
     .environment(\.openFolds, open)
+    .environment(\.pinLatestSpike, args.contains("--pin-spike"))
     .background(Color(nsColor: .windowBackgroundColor))
     await snapshotView(NSHostingView(rootView: root), to: path, light: args.contains("--light"))
 }

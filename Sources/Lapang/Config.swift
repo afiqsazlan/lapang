@@ -5,6 +5,7 @@ import Foundation
 struct Config: Decodable {
     var refreshSeconds = 60
     var disk = Disk()
+    var memory = Memory()
     var xcode = Xcode()
     var processes = Processes()
     var caches = Caches()
@@ -45,6 +46,18 @@ struct Config: Decodable {
             watch = try c.decodeIfPresent([String].self, forKey: .watch) ?? watch
         }
         enum CodingKeys: String, CodingKey { case warnGB, criticalGB, notify, forecastHours, watch }
+    }
+
+    struct Memory: Decodable {
+        /// A notification when memory pressure turns critical, naming what grew.
+        var notify = true
+
+        init() {}
+        init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: CodingKeys.self)
+            notify = try c.decodeIfPresent(Bool.self, forKey: .notify) ?? notify
+        }
+        enum CodingKeys: String, CodingKey { case notify }
     }
 
     struct Xcode: Decodable {
@@ -200,8 +213,9 @@ struct Config: Decodable {
         worktrees = try c.decodeIfPresent(Worktrees.self, forKey: .worktrees) ?? worktrees
         sections = try c.decodeIfPresent([SectionConfig].self, forKey: .sections) ?? sections
         share = try c.decodeIfPresent(Share.self, forKey: .share) ?? share
+        memory = try c.decodeIfPresent(Memory.self, forKey: .memory) ?? memory
     }
-    enum CodingKeys: String, CodingKey { case refreshSeconds, disk, xcode, processes, caches, ports, worktrees, sections, share }
+    enum CodingKeys: String, CodingKey { case refreshSeconds, disk, memory, xcode, processes, caches, ports, worktrees, sections, share }
 
     static let directory = Paths.home + "/.config/lapang"
     static let path = directory + "/config.json"
@@ -220,6 +234,7 @@ struct Config: Decodable {
     {
       "refreshSeconds": 60,
       "disk": { "warnGB": 20, "criticalGB": 10, "notify": true, "forecastHours": 24, "watch": [] },
+      "memory": { "notify": true },
       "xcode": { "idleDays": 3, "protect": [] },
       "processes": {
         "names": ["dart", "dartvm", "dartaotruntime"],

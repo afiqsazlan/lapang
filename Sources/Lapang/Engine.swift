@@ -17,6 +17,7 @@ struct Snapshot {
     var memTotal: UInt64 = ProcessInfo.processInfo.physicalMemory
     var memHistory: [MemoryPoint] = []  // last 24 hours, a point a minute
     var memUsers: [MemoryUser] = []
+    var memSpikes: [PressureSpike] = []  // last 7 days
 
     var sims: [Sim]?  // nil when Xcode's simctl isn't available
     var procs: [DevProc]
@@ -179,10 +180,14 @@ enum Engine {
         var full = snap
         let pressure = full.pressure
         full.memUsed = MemoryProbe.used()
-        full.memHistory = MemoryHistory.record(MemoryPoint(
-            t: Date(), pressure: pressure, swapGB: Double(swapUsed) / 1_073_741_824,
-            usedGB: Double(full.memUsed) / 1_073_741_824))
-        full.memUsers = MemoryProbe.users()
+        let point = MemoryPoint(t: Date(), pressure: pressure, swapGB: Double(swapUsed) / 1_073_741_824,
+                                usedGB: Double(full.memUsed) / 1_073_741_824)
+        let recorded = MemoryHistory.record(point)
+        let users = MemoryProbe.users(limit: 40)
+        full.memHistory = recorded.day
+        full.memUsers = Array(users.prefix(8))
+        full.memSpikes = PressureSpikes.observe(point, previous: recorded.previous, stored: recorded.stored,
+                                                history: recorded.day, users: users)
         full.ports = Ports.discover(config.ports)
         let wt = config.worktrees
         if !wt.repos.isEmpty || !wt.roots.isEmpty {

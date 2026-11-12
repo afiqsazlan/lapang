@@ -16,6 +16,7 @@ final class Monitor: ObservableObject {
     private var timer: Timer?
     private var interval: TimeInterval = 60
     private var lastNotified: Date?
+    private var lastMemoryNotified: Date?
     /// Only the running app acts on its own (stopping idle MCP servers); renders never do.
     private var automate = false
 
@@ -46,6 +47,7 @@ final class Monitor: ObservableObject {
         let wanted = TimeInterval(max(15, s.config.refreshSeconds))
         if wanted != interval { schedule(wanted) }
         alertIfLow(s)
+        if automate { alertIfCritical(s) }
         if automate { stopIdleMCPServers(s) }
         WeeklyRecap.maybeNotify(s)
         if SizeStore.shared.isDue { measure() }
@@ -119,6 +121,18 @@ final class Monitor: ObservableObject {
             c.body = String(format: "%.0f GB free. Open Lapang in the menu bar to clean up.", s.freeGB)
         }
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "disk", content: c, trigger: nil))
+    }
+
+    /// Once an hour at most, when a spike to critical was just recorded.
+    private func alertIfCritical(_ s: Snapshot) {
+        guard s.config.memory.notify, let spike = s.memSpikes.last, spike.trigger == .critical,
+              Date().timeIntervalSince(spike.t) < 5 * 60 else { return }
+        if let t = lastMemoryNotified, Date().timeIntervalSince(t) < 3600 { return }
+        lastMemoryNotified = Date()
+        let c = UNMutableNotificationContent()
+        c.title = "Memory critical"
+        c.body = spike.since == nil ? "Biggest now: \(spike.summary)." : "\(spike.summary) in the last 10 minutes."
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "memory", content: c, trigger: nil))
     }
 
     /// Runs `work` off the main thread with a spinner on `key`, then refreshes.
