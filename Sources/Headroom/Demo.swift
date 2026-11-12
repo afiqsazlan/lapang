@@ -79,7 +79,14 @@ enum Demo {
             config: config, configError: nil,
             freeBytes: Int64(freeGB * 1_073_741_824), totalBytes: 460 * 1_073_741_824,
             pressure: 1, swapUsed: 2_200 << 20, swapTotal: 8_192 << 20,
-            sims: [Sim(udid: "A", name: "iPhone 16 Pro"), Sim(udid: "B", name: "iPad Air 13-inch (M2)")],
+            sims: [
+                Sim(udid: "A", name: "iPhone 16 Pro", usage: SimUsage(
+                    apps: [("Shop", "com.example.shop")], project: home + "/code/worktrees/checkout-redesign/shop",
+                    tool: "flutter run", launcher: "Claude Code")),
+                Sim(udid: "B", name: "iPad Air 13-inch (M2)", usage: SimUsage(
+                    apps: [("Weather", "com.example.weather")], project: home + "/code/weather",
+                    tool: "xcodebuild", launcher: "Xcode")),
+            ],
             procs: procs,
             derivedDataRoot: root, derived: derived, caches: caches,
             history: history,

@@ -12,8 +12,8 @@ The menu bar shows free disk space (`41G`) and adds a warning sign when space is
 - **Disk**: free space, a usage bar, a sparkline of the last 24 hours, and a full chart (24 hours or 7 days) under "What grew".
 - **Trend**: how fast the disk is filling (a straight-line fit over the last 24 hours, restarting after any cleanup) and when it will reach your warning line, drawn as a dashed projection on the chart. A comparison with the size check from about a day ago shows what grew, e.g. `+4.2 GB Xcode build caches (mostly my-app +3.7 GB)`, with an "everything else" line for growth no measured folder explains. You get a notification when free space drops below your threshold, or when it's on course to within `forecastHours`.
 - **Memory**: memory pressure and swap. macOS can't grow swap on a nearly full disk, so a full disk shows up as memory trouble too.
-- **Simulators**: booted iOS simulators, each with a shut-down button.
-- **Dev processes**: watched processes (Dart and Flutter by default) with memory use and uptime. A process is marked stale when its parent died or its folder is gone.
+- **Simulators**: booted iOS simulators and what each is for: the app running inside it, the project folder of the `flutter run` or `xcodebuild` driving it, and the app that launched that (your terminal, Xcode, Claude Code). A simulator still running an app from a deleted folder shows up under things to clean.
+- **Dev processes**: watched processes (Dart and Flutter by default, including `flutter run`) with memory use and uptime. A process is marked stale when its parent died or its folder is gone.
 - **Xcode build caches**: one row per DerivedData folder, mapped back to its project. Each shows size and when it was last built, and whether the project still exists. You can clean orphaned or unused caches in bulk; projects you mark as protected are never touched.
 - **Package caches**: npm, Yarn, pnpm, CocoaPods, Gradle, Homebrew, pub, iOS DeviceSupport and Xcode archives, with a Clear button where clearing is safe.
 - **Custom sections**: anything else, from your own scripts (see below).
@@ -43,7 +43,7 @@ Gear menu → **Edit config…** opens `~/.config/headroom/config.json`, creatin
     "idleDays": 3,
     "protect": ["~/code/my-app"]
   },
-  "processes": { "names": ["dart", "dartaotruntime"] },
+  "processes": { "names": ["dart", "dartvm", "dartaotruntime"] },
   "caches": { "hide": ["pnpm"] },
   "sections": [
     { "title": "Servers", "icon": "server.rack", "command": "~/.config/headroom/sections/servers.sh" }
@@ -92,7 +92,7 @@ The section runs on every refresh, so keep it fast (well under a second).
 
 The app icon is drawn in code: `xcrun swift Support/make-icon.swift` regenerates `Support/AppIcon.icns` and `docs/icon.png`.
 
-`Headroom --render out.png` draws the full panel off-screen with live data and exits. It's useful for checking layout without clicking around the menu bar. Add `--demo` to use built-in sample data and `--light` for the light appearance. The README screenshot is made with:
+`Headroom --render out.png` draws the full panel off-screen with live data and exits. It's useful for checking layout without clicking around the menu bar. Add `--demo` to use built-in sample data, `--light` for the light appearance, and `--open "Simulators,Memory"` to show sections opened. The README screenshot is made with:
 
 ```bash
 ./build.sh --no-install && build/Headroom.app/Contents/MacOS/Headroom --render docs/screenshot.png --demo --light

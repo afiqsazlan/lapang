@@ -329,10 +329,20 @@ extension Snapshot {
                              subtitle: "\(kind), stale (\(why))", button: "Kill", kind: .process(p), kb: 0))
         }
         if let sims, !sims.isEmpty {
-            out.append(Chore(id: "sims", icon: "iphone",
-                             title: sims.count == 1 ? "1 simulator running" : "\(sims.count) simulators running",
-                             subtitle: sims.map(\.name).joined(separator: ", "),
-                             button: "Shut down", kind: .simulators(sims), kb: 0))
+            // a simulator still running an app whose folder was deleted is its own chore
+            for sim in sims where sim.usage.projectGone {
+                out.append(Chore(id: "sim-\(sim.udid)", icon: "iphone", title: sim.name,
+                                 subtitle: "\(sim.usage.projectShort ?? "Its project") was deleted",
+                                 button: "Shut down", kind: .simulators([sim]), kb: 0))
+            }
+            let rest = sims.filter { !$0.usage.projectGone }
+            if !rest.isEmpty {
+                out.append(Chore(id: "sims", icon: "iphone",
+                                 title: rest.count == 1 ? "1 simulator running" : "\(rest.count) simulators running",
+                                 subtitle: rest.map { s in s.usage.projectShort.map { "\(s.name) · \($0)" } ?? s.name }
+                                     .joined(separator: ", "),
+                                 button: "Shut down", kind: .simulators(rest), kb: 0))
+            }
         }
         return out
     }
@@ -398,20 +408,23 @@ struct ChoresBlock: View {
                                        button: "Delete")) { Actions.deleteDerived([e], root: root) }
         case .process(let p):
             m.act(c.id) { Actions.kill(p) }
-        case .simulators:
-            m.act(c.id) { Actions.shutdownAllSims() }
+        case .simulators(let list):
+            let all = list.count == (s.sims?.count ?? 0)
+            let udids = list.map(\.udid)
+            m.act(c.id) { all ? Actions.shutdownAllSims() : udids.compactMap(Actions.shutdownSim).first }
         }
     }
 
     func cleanAll(_ chores: [Chore]) {
-        var caches: [DerivedEntry] = [], procs: [DevProc] = [], sims = false
+        var caches: [DerivedEntry] = [], procs: [DevProc] = [], simIDs: [String] = []
         for c in chores {
             switch c.kind {
             case .cache(let e): caches.append(e)
             case .process(let p): procs.append(p)
-            case .simulators: sims = true
+            case .simulators(let list): simIDs += list.map(\.udid)
             }
         }
+        let sims = !simIDs.isEmpty
         var parts: [String] = []
         if !caches.isEmpty {
             parts.append("delete \(caches.count) build cache\(caches.count == 1 ? "" : "s") (\(human(kb: caches.reduce(0) { $0 + ($1.sizeKB ?? 0) })))")
@@ -419,13 +432,13 @@ struct ChoresBlock: View {
         if !procs.isEmpty { parts.append("kill \(procs.count) stale process\(procs.count == 1 ? "" : "es")") }
         if sims { parts.append("shut down the simulators") }
         let root = s.derivedDataRoot
-        let (toDelete, toKill, shutDown) = (caches, procs, sims)
+        let (toDelete, toKill, shutDown) = (caches, procs, simIDs)
         m.act("clean-all", confirm: .init(title: "Clean all?", message: "This will " + parts.joined(separator: ", ") + ".",
                                           button: "Clean all")) {
             var msg = "Cleaned"
             if !toDelete.isEmpty, let r = Actions.deleteDerived(toDelete, root: root) { msg = r }
             if !toKill.isEmpty { _ = Actions.killAll(toKill) }
-            if shutDown { _ = Actions.shutdownAllSims() }
+            for udid in shutDown { _ = Actions.shutdownSim(udid) }
             return msg
         }
     }
@@ -710,7 +723,8 @@ struct SimFold: View {
                 Text("None booted").font(.callout).foregroundStyle(.secondary).padding(.vertical, 4)
             }
             ForEach(sims) { sim in
-                ItemRow(title: sim.name) { hovering in
+                ItemRow(title: sim.name, subtitle: sim.usage.summary,
+                        tags: sim.usage.projectGone ? ["project gone"] : [], help: sim.usage.detail) { hovering in
                     HoverAction(key: "sim-\(sim.udid)", icon: "power", help: "Shut down", visible: hovering) {
                         let udid = sim.udid
                         m.act("sim-\(udid)") { Actions.shutdownSim(udid) }
@@ -827,5 +841,28 @@ struct CustomRow: View {
         m.act(key, confirm: confirm.map { .init(title: "\(row.title): \(title)?", message: $0, button: "Continue") }) {
             Sections.perform(cfg, args)
         }
+    }
+}
+
+extension SimUsage {
+    /// "m4-review/carer-app-v2": the last two folders, which tell worktrees apart.
+    var projectShort: String? { project.map { $0.split(separator: "/").suffix(2).joined(separator: "/") } }
+
+    /// One line for the row: app · project · launcher.
+    var summary: String? {
+        var parts: [String] = []
+        if !apps.isEmpty { parts.append(apps.map(\.name).joined(separator: ", ")) }
+        if let p = projectShort { parts.append(p) }
+        if let l = launcher { parts.append("via " + l) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// The full story, for the hover tooltip.
+    var detail: String {
+        var lines: [String] = []
+        for a in apps { lines.append("\(a.name) (\(a.bundleID))") }
+        if let p = project { lines.append("\(tool ?? "Started") in \(Paths.abbreviate(p))\(projectGone ? " (folder deleted)" : "")") }
+        if let l = launcher { lines.append("Launched from \(l)") }
+        return lines.isEmpty ? "No app of yours is running here" : lines.joined(separator: "\n")
     }
 }

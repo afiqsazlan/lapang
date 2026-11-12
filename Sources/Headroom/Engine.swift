@@ -54,10 +54,23 @@ struct Snapshot {
 
 enum Level { case ok, warn, crit }
 
-struct Sim: Identifiable, Decodable {
+struct Sim: Identifiable {
     let udid: String
     let name: String
+    var usage = SimUsage()
     var id: String { udid }
+}
+
+/// What a booted simulator is being used for, worked out from the processes around it.
+struct SimUsage {
+    /// Apps installed by you (not system apps) currently running inside the simulator.
+    var apps: [(name: String, bundleID: String)] = []
+    /// The folder of the `flutter run` / `xcodebuild` driving it, and whether that folder still exists.
+    var project: String?
+    var projectGone = false
+    var tool: String?
+    /// The Mac app that started the tool: a terminal, an editor, or Claude Code.
+    var launcher: String?
 }
 
 struct DevProc: Identifiable {
@@ -186,10 +199,87 @@ enum Engine {
         guard let r = Shell.run("/usr/bin/xcrun", ["simctl", "list", "devices", "booted", "-j"]), r.status == 0,
               let list = try? JSONDecoder().decode(List.self, from: r.out)
         else { return nil }
-        return list.devices.values.flatMap { $0 }
+        var sims = list.devices.values.flatMap { $0 }
             .filter { $0.state == "Booted" }
             .map { Sim(udid: $0.udid, name: $0.name) }
             .sorted { $0.name < $1.name }
+        attachUsage(&sims)
+        return sims
+    }
+
+    /// Two kinds of process tie a simulator to its work. Apps run as Mac processes from inside the
+    /// simulator's folder. And the tool driving it (`flutter run` streams logs through
+    /// `simctl spawn <udid>`; `xcodebuild` takes `-destination id=<udid>`) names its id in its
+    /// arguments, so walking up from there finds the tool, its folder, and the app that started it.
+    static func attachUsage(_ sims: inout [Sim]) {
+        guard !sims.isEmpty else { return }
+        let count = proc_listallpids(nil, 0)
+        guard count > 0 else { return }
+        var pids = [pid_t](repeating: 0, count: Int(count) + 64)
+        let n = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+        for pid in pids.prefix(Int(max(n, 0))) where pid > 0 {
+            guard let path = execPath(pid) else { continue }
+            let exe = (path as NSString).lastPathComponent
+            for i in sims.indices {
+                let udid = sims[i].udid
+                if path.contains("/CoreSimulator/Devices/\(udid)/data/Containers/Bundle/Application/"),
+                   let app = appBundle(path) {
+                    if !sims[i].usage.apps.contains(where: { $0.bundleID == app.bundleID }) { sims[i].usage.apps.append(app) }
+                } else if (exe == "simctl" || exe == "xcodebuild"), sims[i].usage.project == nil,
+                          args(pid).contains(where: { $0.contains(udid) }) {
+                    describeDriver(of: pid, into: &sims[i].usage)
+                }
+            }
+        }
+    }
+
+    private static func appBundle(_ path: String) -> (name: String, bundleID: String)? {
+        guard let r = path.range(of: ".app/") else { return nil }
+        let bundle = String(path[..<r.lowerBound]) + ".app"
+        guard let d = try? Data(contentsOf: URL(fileURLWithPath: bundle + "/Info.plist")),
+              let plist = try? PropertyListSerialization.propertyList(from: d, format: nil) as? [String: Any]
+        else { return nil }
+        let name = (plist["CFBundleDisplayName"] as? String) ?? (plist["CFBundleName"] as? String)
+            ?? ((bundle as NSString).lastPathComponent as NSString).deletingPathExtension
+        return (name, (plist["CFBundleIdentifier"] as? String) ?? "")
+    }
+
+    private static func describeDriver(of start: pid_t, into usage: inout SimUsage) {
+        var pid = start
+        for _ in 0 ..< 20 {
+            // some links (like the root-owned `login`) hide their path; keep climbing past them
+            let path = execPath(pid) ?? ""
+            let exe = (path as NSString).lastPathComponent
+            let a = args(pid).joined(separator: " ")
+            if usage.tool == nil {
+                if a.contains("flutter_tools") { usage.tool = "flutter run" }
+                else if exe == "xcodebuild" { usage.tool = "xcodebuild" }
+                if usage.tool != nil, let cwd = currentDir(pid), !cwd.isEmpty {
+                    usage.project = cwd
+                    usage.projectGone = !FileManager.default.fileExists(atPath: cwd)
+                }
+            }
+            if exe == "claude" || path.contains("/claude-code/") {
+                usage.launcher = "Claude Code"
+                break
+            }
+            if let r = path.range(of: ".app/Contents/MacOS/") {
+                // the outermost .app wins: iTerm2 rather than its helper
+                usage.launcher = ((String(path[..<r.lowerBound]) as NSString).lastPathComponent)
+            }
+            guard let parent = parentPID(pid), parent > 1 else { break }
+            pid = parent
+        }
+    }
+
+    /// From the kernel's process table, which (unlike proc_pidinfo) also answers for root-owned
+    /// processes such as `login` between a terminal and its shell.
+    static func parentPID(_ pid: pid_t) -> pid_t? {
+        var k = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.size
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, 4, &k, &size, nil, 0) == 0, size > 0 else { return nil }
+        return k.kp_eproc.e_ppid
     }
 
     // MARK: Processes (via libproc, no ps/lsof)
@@ -224,7 +314,7 @@ enum Engine {
 
     static func kind(name: String, args: [String]) -> String {
         let a = args.joined(separator: " ")
-        if name == "dart" || name == "dartaotruntime" {
+        if name == "dart" || name == "dartvm" || name == "dartaotruntime" {
             if a.contains(" mcp-server") { return "mcp" }
             if a.contains("language-server") { return "lsp" }
             if a.contains("development-service") { return "devtools" }

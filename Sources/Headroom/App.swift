@@ -86,7 +86,7 @@ func renderPanel(to path: String) async {
         await m.refresh()
     }
     let root = Panel(scroll: false).environmentObject(m)
-        .environment(\.openFolds, args.contains("--demo") ? ["What grew", "Xcode build caches"] : nil)
+        .environment(\.openFolds, renderOpenFolds(args))
         .background(Color(nsColor: .windowBackgroundColor))
     let view = NSHostingView(rootView: root)
     if args.contains("--light") { view.appearance = NSAppearance(named: .aqua) }
@@ -198,4 +198,12 @@ struct Footer: View {
         }
         atLogin = SMAppService.mainApp.status == .enabled
     }
+}
+
+/// `--open "Simulators,Memory"` forces those sections open in a render; --demo defaults to two.
+private func renderOpenFolds(_ args: [String]) -> Set<String>? {
+    if let i = args.firstIndex(of: "--open"), i + 1 < args.count {
+        return Set(args[i + 1].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+    }
+    return args.contains("--demo") ? ["What grew", "Xcode build caches"] : nil
 }

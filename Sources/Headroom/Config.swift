@@ -49,7 +49,7 @@ struct Config: Decodable {
 
     struct Processes: Decodable {
         /// Executable names to watch. A watched process is stale when its parent died or its folder is gone.
-        var names = ["dart", "dartaotruntime"]
+        var names = ["dart", "dartvm", "dartaotruntime"]
 
         init() {}
         init(from d: Decoder) throws {
@@ -101,7 +101,7 @@ struct Config: Decodable {
       "refreshSeconds": 60,
       "disk": { "warnGB": 20, "criticalGB": 10, "notify": true, "forecastHours": 24, "watch": [] },
       "xcode": { "idleDays": 3, "protect": [] },
-      "processes": { "names": ["dart", "dartaotruntime"] },
+      "processes": { "names": ["dart", "dartvm", "dartaotruntime"] },
       "caches": { "hide": [] },
       "sections": []
     }
