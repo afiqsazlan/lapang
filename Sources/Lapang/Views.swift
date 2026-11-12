@@ -379,6 +379,7 @@ struct Chore: Identifiable {
         case cache(DerivedEntry)
         case process(DevProc)
         case simulators([Sim])
+        case port(Listener)
     }
     let id: String
     let icon: String
@@ -414,6 +415,11 @@ extension Snapshot {
                              subtitle: "\(kind) · stale · \(human(bytes: Int64(p.rssBytes)))",
                              button: "Kill", kind: .process(p), kb: 0,
                              help: "Stale because its \(why). Killing it frees \(human(bytes: Int64(p.rssBytes))) of memory."))
+        }
+        for l in ports where l.folderGone && l.stoppable {
+            out.append(Chore(id: "port-\(l.pid)", icon: "network.slash", title: "Port \(l.portList): \(l.kind)",
+                             subtitle: "\(l.folder ?? "Its folder") deleted · \(human(bytes: Int64(l.bytes)))",
+                             button: "Stop", kind: .port(l), kb: 0, help: l.help))
         }
         if let sims, !sims.isEmpty {
             // a simulator still running an app whose folder was deleted is its own chore
@@ -498,16 +504,19 @@ struct ChoresBlock: View {
         case .simulators(let list):
             let all = list.count == (s.sims?.count ?? 0)
             m.act(c.id) { all ? Actions.shutdownAllSims(list) : list.compactMap(Actions.shutdownSim).first }
+        case .port(let l):
+            m.act(c.id, confirm: PortActions.confirm(l)) { PortActions.stop(l) }
         }
     }
 
     func cleanAll(_ chores: [Chore]) {
-        var caches: [DerivedEntry] = [], procs: [DevProc] = [], sims: [Sim] = []
+        var caches: [DerivedEntry] = [], procs: [DevProc] = [], sims: [Sim] = [], servers: [Listener] = []
         for c in chores {
             switch c.kind {
             case .cache(let e): caches.append(e)
             case .process(let p): procs.append(p)
             case .simulators(let list): sims += list
+            case .port(let l): servers.append(l)
             }
         }
         var parts: [String] = []
@@ -515,9 +524,12 @@ struct ChoresBlock: View {
             parts.append("delete \(caches.count) build cache\(caches.count == 1 ? "" : "s") (\(human(kb: caches.reduce(0) { $0 + ($1.sizeKB ?? 0) })))")
         }
         if !procs.isEmpty { parts.append("kill \(procs.count) stale process\(procs.count == 1 ? "" : "es")") }
+        if !servers.isEmpty {
+            parts.append("stop \(servers.count) server\(servers.count == 1 ? "" : "s") whose folder was deleted (port\(servers.count == 1 ? "" : "s") \(servers.map(\.portList).joined(separator: ", ")))")
+        }
         if !sims.isEmpty { parts.append("shut down the simulators") }
         let root = s.derivedDataRoot
-        let (toDelete, toKill, shutDown) = (caches, procs, sims)
+        let (toDelete, toKill, shutDown, toStop) = (caches, procs, sims, servers)
         m.act("clean-all", confirm: .init(title: "Clean all?", message: "This will " + parts.joined(separator: ", ") + ".",
                                           button: "Clean all")) {
             ActionLog.$batch.withValue("clean all") {
@@ -525,6 +537,7 @@ struct ChoresBlock: View {
                 if !toDelete.isEmpty, let r = Actions.deleteDerived(toDelete, root: root) { msg = r }
                 if !toKill.isEmpty { _ = Actions.killAll(toKill, action: "kill stale process") }
                 for sim in shutDown { _ = Actions.shutdownSim(sim) }
+                for l in toStop { _ = PortActions.stop(l) }
                 return msg
             }
         }
@@ -796,6 +809,45 @@ struct ProcessFold: View {
                 }
                 .buttonStyle(.link).font(.caption).padding(.top, 4)
             }
+        }
+    }
+}
+
+struct PortsFold: View {
+    @EnvironmentObject var m: Monitor
+    let s: Snapshot
+
+    var body: some View {
+        let ls = s.ports
+        let cfg = s.config.ports
+        Fold("Ports", icon: "network", value: ls.isEmpty ? "None listening" : "\(ls.count) listening",
+             attention: ls.contains(where: \.folderGone)) {
+            if ls.isEmpty {
+                Text("No servers of yours are listening").font(.callout).foregroundStyle(.secondary).padding(.vertical, 4)
+            }
+            ForEach(ls) { l in
+                ItemRow(title: l.title, subtitle: l.subtitle, tags: l.tags, help: l.help) { hovering in
+                    HStack(spacing: 2) {
+                        if let url = l.url {
+                            Button { m.open(url) } label: { Image(systemName: "arrow.up.right.square") }
+                                .buttonStyle(.borderless).help("Open \(url)")
+                                .opacity(hovering ? 1 : 0).frame(width: 22)
+                        } else {
+                            Color.clear.frame(width: 22, height: 1)
+                        }
+                        if l.stoppable {
+                            HoverAction(key: "port-\(l.pid)", icon: "stop.circle", help: "Stop", visible: hovering) {
+                                m.act("port-\(l.pid)", confirm: PortActions.confirm(l)) { PortActions.stop(l) }
+                            }
+                        } else {
+                            Image(systemName: "lock").foregroundStyle(.tertiary).frame(width: 22)
+                                .help(l.stopNote ?? "")
+                        }
+                    }
+                }
+            }
+            Text(verbatim: "Your own servers on ports \(cfg.minPort)–\(cfg.maxPort), reachable only from this Mac unless tagged. App helpers and system services are left out.")
+                .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
         }
     }
 }

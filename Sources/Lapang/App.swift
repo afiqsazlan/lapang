@@ -152,6 +152,7 @@ struct Panel: View {
             if !s.derived.isEmpty { XcodeFold(s: s) }
             if !s.caches.isEmpty { CachesFold(s: s) }
             if !s.config.processes.names.isEmpty { ProcessFold(s: s) }
+            PortsFold(s: s)
             if s.sims != nil { SimFold(s: s) }
             ForEach(s.sections) { CustomFold(state: $0) }
         }

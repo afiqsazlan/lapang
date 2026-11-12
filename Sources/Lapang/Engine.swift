@@ -20,6 +20,7 @@ struct Snapshot {
 
     var sims: [Sim]?  // nil when Xcode's simctl isn't available
     var procs: [DevProc]
+    var ports: [Listener] = []
     var derivedDataRoot: String
     var derived: [DerivedEntry]
     var caches: [CacheInfo]
@@ -178,6 +179,7 @@ enum Engine {
             t: Date(), pressure: pressure, swapGB: Double(swapUsed) / 1_073_741_824,
             usedGB: Double(full.memUsed) / 1_073_741_824))
         full.memUsers = MemoryProbe.users()
+        full.ports = Ports.discover(config.ports)
         return full
     }
 

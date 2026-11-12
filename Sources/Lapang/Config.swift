@@ -8,6 +8,7 @@ struct Config: Decodable {
     var xcode = Xcode()
     var processes = Processes()
     var caches = Caches()
+    var ports = Ports()
     var sections: [SectionConfig] = []
 
     struct Disk: Decodable {
@@ -71,6 +72,47 @@ struct Config: Decodable {
         enum CodingKeys: String, CodingKey { case hide }
     }
 
+    struct Ports: Decodable {
+        /// Ports outside this range are left out; 49152 and up is the range the system hands out
+        /// for temporary ports (debugger and editor helpers), not servers you started.
+        var minPort = 1024
+        var maxPort = 49151
+        /// Port numbers, or process names / kinds ("adb", "cloudflared", "Vite"), to leave out.
+        var hide: [Hide] = []
+        /// Your own names for ports, e.g. {"3000": "tunnel origin"}.
+        var names: [String: String] = [:]
+
+        enum Hide: Decodable {
+            case port(Int)
+            case name(String)
+
+            init(from d: Decoder) throws {
+                let c = try d.singleValueContainer()
+                if let p = try? c.decode(Int.self) { self = .port(p) } else { self = .name(try c.decode(String.self)) }
+            }
+
+            func matches(port p: UInt16) -> Bool {
+                if case .port(let n) = self { return n == Int(p) }
+                return false
+            }
+
+            func matches(listener l: Listener) -> Bool {
+                guard case .name(let n) = self else { return false }
+                return [l.name, l.kind].contains { $0.caseInsensitiveCompare(n) == .orderedSame }
+            }
+        }
+
+        init() {}
+        init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: CodingKeys.self)
+            minPort = try c.decodeIfPresent(Int.self, forKey: .minPort) ?? minPort
+            maxPort = try c.decodeIfPresent(Int.self, forKey: .maxPort) ?? maxPort
+            hide = try c.decodeIfPresent([Hide].self, forKey: .hide) ?? hide
+            names = try c.decodeIfPresent([String: String].self, forKey: .names) ?? names
+        }
+        enum CodingKeys: String, CodingKey { case minPort, maxPort, hide, names }
+    }
+
     init() {}
     init(from d: Decoder) throws {
         let c = try d.container(keyedBy: CodingKeys.self)
@@ -79,9 +121,10 @@ struct Config: Decodable {
         xcode = try c.decodeIfPresent(Xcode.self, forKey: .xcode) ?? xcode
         processes = try c.decodeIfPresent(Processes.self, forKey: .processes) ?? processes
         caches = try c.decodeIfPresent(Caches.self, forKey: .caches) ?? caches
+        ports = try c.decodeIfPresent(Ports.self, forKey: .ports) ?? ports
         sections = try c.decodeIfPresent([SectionConfig].self, forKey: .sections) ?? sections
     }
-    enum CodingKeys: String, CodingKey { case refreshSeconds, disk, xcode, processes, caches, sections }
+    enum CodingKeys: String, CodingKey { case refreshSeconds, disk, xcode, processes, caches, ports, sections }
 
     static let directory = Paths.home + "/.config/lapang"
     static let path = directory + "/config.json"
@@ -103,6 +146,7 @@ struct Config: Decodable {
       "xcode": { "idleDays": 3, "protect": [] },
       "processes": { "names": ["dart", "dartvm", "dartaotruntime"] },
       "caches": { "hide": [] },
+      "ports": { "minPort": 1024, "maxPort": 49151, "hide": [], "names": {} },
       "sections": []
     }
 

@@ -5,7 +5,7 @@ import Foundation
 // what they would do unless --yes is given, so an agent can show you first and then confirm.
 
 enum CLI {
-    static let commands: Set<String> = ["status", "clean", "kill-old-mcp", "quit", "log", "help", "--help"]
+    static let commands: Set<String> = ["status", "clean", "kill-old-mcp", "quit", "log", "ports", "stop-port", "help", "--help"]
 
     /// Runs a command and exits when the binary was started with one; otherwise returns and the app starts.
     static func runIfRequested() {
@@ -20,6 +20,8 @@ enum CLI {
         case "kill-old-mcp": code = killOldMCP(yes: rest.contains("--yes"))
         case "quit": code = quit(rest)
         case "log": code = log(rest)
+        case "ports": code = ports(json: rest.contains("--json"))
+        case "stop-port": code = stopPort(rest)
         default: code = help()
         }
         exit(code)
@@ -69,6 +71,11 @@ enum CLI {
                 line += " · \(mcp.count) MCP servers; `lapang kill-old-mcp` frees \(human(bytes: Int64(oldMCPBytes(s))))"
             }
             out.append(line)
+        }
+        if !s.ports.isEmpty {
+            out.append("Ports: " + s.ports.map { l in
+                "\(l.portList) \(l.kind)" + (l.folderGone ? " (folder gone)" : l.folder.map { " (\($0))" } ?? "")
+            }.joined(separator: " · "))
         }
         if let sims = s.sims, !sims.isEmpty {
             out.append("Simulators:")
@@ -151,6 +158,7 @@ enum CLI {
                 "pid": $0.pid, "name": $0.name, "kind": $0.kind, "bytes": $0.rssBytes,
                 "folder": $0.cwd, "stale": $0.stale, "uptime": $0.uptime,
             ] },
+            "ports": s.ports.map(portJSON),
             "xcodeCaches": s.derived.map { [
                 "project": $0.title, "status": "\($0.status)", "kb": opt($0.sizeKB), "idleDays": $0.idleDays,
             ] },
@@ -167,7 +175,7 @@ enum CLI {
     /// `lapang clean [--only caches,processes,simulators] [--yes]`
     static func clean(_ args: [String]) -> Int32 {
         let s = snapshot()
-        var only: Set<String> = ["caches", "processes", "simulators"]
+        var only: Set<String> = ["caches", "processes", "simulators", "ports"]
         if let i = args.firstIndex(of: "--only"), i + 1 < args.count {
             only = Set(args[i + 1].split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) })
         }
@@ -176,6 +184,7 @@ enum CLI {
             case .cache: return only.contains("caches")
             case .process: return only.contains("processes")
             case .simulators: return only.contains("simulators")
+            case .port: return only.contains("ports")
             }
         }
         guard !chores.isEmpty else { print("Nothing to clean."); return 0 }
@@ -190,6 +199,7 @@ enum CLI {
                 switch c.kind {
                 case .cache(let e): result = Actions.deleteDerived([e], root: s.derivedDataRoot)
                 case .process(let p): result = Actions.kill(p) ?? "Killed \(p.name) (pid \(p.pid))"
+                case .port(let l): result = PortActions.stop(l)
                 case .simulators(let list): result = list.compactMap(Actions.shutdownSim).first ?? "Shut down \(list.map(\.name).joined(separator: ", "))"
                 }
                 print("  - \(c.title): \(result ?? "done")")
@@ -269,15 +279,84 @@ enum CLI {
         return 0
     }
 
+    // MARK: ports
+
+    static func portJSON(_ l: Listener) -> [String: Any] {
+        [
+            "ports": l.ports.map(Int.init), "pid": l.pid, "process": l.name, "kind": l.kind,
+            "label": l.label ?? NSNull(), "exposure": l.exposure, "folder": l.cwd, "folderGone": l.folderGone,
+            "uptime": l.uptime, "startedAt": ISO8601DateFormatter().string(from: l.started), "bytes": l.bytes,
+            "url": l.url ?? NSNull(), "stoppable": l.stoppable,
+        ]
+    }
+
+    /// `lapang ports [--json]`
+    static func ports(json: Bool) -> Int32 {
+        let (config, _) = Config.load()
+        let ls = Ports.discover(config.ports)
+        if json {
+            let data = try! JSONSerialization.data(withJSONObject: ls.map(portJSON), options: [.prettyPrinted, .sortedKeys])
+            print(String(decoding: data, as: UTF8.self))
+            return 0
+        }
+        guard !ls.isEmpty else {
+            print("No servers of yours are listening on ports \(config.ports.minPort)–\(config.ports.maxPort).")
+            return 0
+        }
+        let width = ls.map(\.portList.count).max() ?? 5
+        let names = ls.map { "\($0.kind)\($0.label.map { " [\($0)]" } ?? "")" }
+        let nameWidth = names.map(\.count).max() ?? 10
+        for (l, name) in zip(ls, names) {
+            let port = l.portList.padding(toLength: width, withPad: " ", startingAt: 0)
+            var line = "\(port)  \(name.padding(toLength: nameWidth, withPad: " ", startingAt: 0))  pid \(String(l.pid).padding(toLength: 6, withPad: " ", startingAt: 0))"
+            line += l.subtitle + " · " + l.exposure
+            if l.folderGone { line += "  (folder deleted)" }
+            print(line)
+        }
+        return 0
+    }
+
+    /// `lapang stop-port <port> [--yes]`: SIGTERM to the process that owns the LISTEN socket on
+    /// that port, and nothing else. Programs connected to the port are never touched.
+    static func stopPort(_ args: [String]) -> Int32 {
+        guard let arg = args.first(where: { !$0.hasPrefix("--") }), let port = UInt16(arg.trimmingCharacters(in: CharacterSet(charactersIn: ":"))) else {
+            print("Usage: lapang stop-port <port> [--yes]")
+            return 2
+        }
+        // every listener of yours, ignoring the panel's port range and hide list
+        guard let l = Ports.all().first(where: { $0.ports.contains(port) }) else {
+            print("Nothing of yours is listening on port \(port). (System services, app helpers and other users' processes aren't counted.)")
+            return 1
+        }
+        if let note = l.stopNote { print("\(l.kind) holds port \(port). \(note)"); return 1 }
+        guard args.contains("--yes") else {
+            print("Would stop \(l.kind) on port \(port): \(l.name), pid \(l.pid), up \(l.uptime), \(human(bytes: Int64(l.bytes)))"
+                + (l.cwd.isEmpty ? "" : ", in \(Paths.abbreviate(l.cwd))") + ".")
+            if l.ports.count > 1 { print("It also listens on \(l.ports.filter { $0 != port }.map(String.init).joined(separator: ", ")).") }
+            print("Only this process gets SIGTERM. Anything connected to the port (a tunnel, a browser) is left alone.")
+            if l.isTunnel { print("This is a tunnel: every URL served through it goes down until you start it again.") }
+            print("Run again with --yes to do it.")
+            return 0
+        }
+        var target = l
+        target.ports = [port]
+        print(PortActions.stop(target))
+        return 0
+    }
+
     static func help() -> Int32 {
         print("""
         lapang status [--json]       what the menu bar panel shows, as text or JSON
-        lapang clean [--only caches,processes,simulators] [--yes]
+        lapang clean [--only caches,processes,simulators,ports] [--yes]
                                        stale processes, orphaned/unused build caches, simulators
         lapang kill-old-mcp [--yes]  kill every MCP server but the newest (and its language server)
         lapang quit "<app>" [--yes]  ask an app from "Memory users" to quit
         lapang log [--json] [--limit N]
                                        what Lapang did (newest first, last 30 days)
+        lapang ports [--json]        your servers listening on a TCP port, with folder and uptime
+        lapang stop-port <port> [--yes]
+                                       SIGTERM to the process listening on that port (never to
+                                       programs merely connected to it)
 
         Actions only print what they would do unless --yes is given.
         """)

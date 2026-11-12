@@ -94,7 +94,19 @@ enum Demo {
 
         var config = Config()
         config.xcode.protect = ["~/code/shop"]
-        return Snapshot(
+        func listener(_ pid: pid_t, _ name: String, _ kind: String, _ ports: [UInt16], _ cwd: String, mins: Double,
+                      mb: UInt64, exposure: String = "localhost", label: String? = nil, gone: Bool = false) -> Listener {
+            Listener(pid: pid, ppid: 1, exe: "/usr/local/bin/" + name, name: name, kind: kind, ports: ports,
+                     exposure: exposure, started: started(mins), startSec: 0, cwd: cwd, bytes: mb << 20, folderGone: gone, label: label)
+        }
+        let ports = [
+            listener(6012, "node", "Vite", [3000], home + "/code/worktrees/checkout-redesign", mins: 134, mb: 310, label: "tunnel origin"),
+            listener(5547, "node", "Vite", [5173], home + "/code/worktrees/old-onboarding", mins: 1620, mb: 290, gone: true),
+            listener(6230, "php", "php artisan serve", [8000], home + "/code/api", mins: 302, mb: 64),
+            listener(812, "postgres", "postgres", [5432], "", mins: 4380, mb: 120, exposure: "all interfaces"),
+            listener(815, "redis-server", "redis", [6379], "", mins: 4380, mb: 9),
+        ]
+        var snap = Snapshot(
             config: config, configError: nil,
             freeBytes: Int64(freeGB * 1_073_741_824), totalBytes: 460 * 1_073_741_824,
             pressure: 2, swapUsed: 4_600 << 20, swapTotal: 8_192 << 20,
@@ -123,5 +135,7 @@ enum Demo {
             sections: [SectionState(config: SectionConfig(title: "Local servers", icon: "server.rack", command: ""),
                                     output: output, error: nil)]
         )
+        snap.ports = ports
+        return snap
     }
 }
