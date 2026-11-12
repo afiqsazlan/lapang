@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         UNUserNotificationCenter.current().delegate = self
         guard Self.monitor != nil else { return }  // an off-screen render
         installShortcuts()
+        Updater.shared.start()
         // Opened by hand: show the window. Started at login: stay in the menu bar.
         // The launch event is only readable now; show the window once launch has settled.
         guard !launchedAtLogin() else { return }
@@ -84,7 +85,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                                             withCompletionHandler done: @escaping () -> Void) {
         let id = response.notification.request.identifier
         Task { @MainActor in
-            if id == WeeklyRecap.identifier, let m = Self.monitor { ShareWindow.show(m, kind: .week) } else { self.showWindow() }
+            if id == WeeklyRecap.identifier, let m = Self.monitor {
+                ShareWindow.show(m, kind: .week)
+            } else if id == Updater.notificationID {
+                Updater.shared.check()
+            } else {
+                self.showWindow()
+            }
             done()
         }
     }

@@ -209,6 +209,7 @@ struct Footer: View {
 /// The gear menu, at the foot of the panel and in the window's toolbar.
 struct GearMenu: View {
     @EnvironmentObject var m: Monitor
+    @ObservedObject private var updater = Updater.shared
     @State private var atLogin = SMAppService.mainApp.status == .enabled
 
     var body: some View {
@@ -232,6 +233,13 @@ struct GearMenu: View {
                     .disabled(!FileManager.default.fileExists(atPath: ActionLog.file))
             }
             Divider()
+            if updater.enabled {
+                Button(updater.available.map { "Update to \($0)…" } ?? "Check for Updates…") { updater.check() }
+                    .disabled(!updater.canCheck)
+                Toggle("Check for updates daily", isOn: Binding(get: { updater.automaticChecks },
+                                                               set: { updater.automaticChecks = $0 }))
+            }
+            Text("Lapang \(CLI.versionString)")
             Button("Quit Lapang") { NSApp.terminate(nil) }
         } label: {
             Image(systemName: "gearshape")

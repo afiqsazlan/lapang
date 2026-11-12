@@ -7,24 +7,45 @@
 # Signing is ad-hoc by default, which is all a Mac needs to run an app it built itself.
 # To sign for distribution, set LAPANG_SIGN_IDENTITY to your "Developer ID Application: …"
 # identity (see `security find-identity -v -p codesigning`).
+#
+# LAPANG_RELEASE=1 (set by release.sh) builds a universal binary and keeps the update feed in
+# Info.plist. Other builds leave the feed out, so a build from source never updates itself
+# from a release: update it with `git pull && ./build.sh`.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-swift build -c release
-BIN="$(swift build -c release --show-bin-path)/Lapang"
+ARCH_FLAGS=()
+[ "${LAPANG_RELEASE:-}" = 1 ] && ARCH_FLAGS=(--arch arm64 --arch x86_64)
+
+swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"}
+BIN_DIR_BUILD="$(swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --show-bin-path)"
 
 APP="build/Lapang.app"
 rm -rf build
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/Lapang"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
+cp "$BIN_DIR_BUILD/Lapang" "$APP/Contents/MacOS/Lapang"
 cp Support/Info.plist "$APP/Contents/Info.plist"
 cp Support/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"  # regenerate with: xcrun swift Support/make-icon.swift
+ditto "$BIN_DIR_BUILD/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
 
-if [ -n "${LAPANG_SIGN_IDENTITY:-}" ]; then
-  codesign --force --options runtime --timestamp --sign "$LAPANG_SIGN_IDENTITY" "$APP"
-else
-  codesign --force --sign - "$APP"
+if [ "${LAPANG_RELEASE:-}" != 1 ]; then
+  /usr/libexec/PlistBuddy -c "Delete :SUFeedURL" "$APP/Contents/Info.plist"
 fi
+
+# Sign inside out: Sparkle's helpers, then the framework, then the app. No --deep.
+FW="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
+if [ -n "${LAPANG_SIGN_IDENTITY:-}" ]; then
+  SIGN=(codesign --force --options runtime --timestamp --sign "$LAPANG_SIGN_IDENTITY")
+else
+  SIGN=(codesign --force --sign -)
+fi
+"${SIGN[@]}" "$FW/XPCServices/Installer.xpc"
+"${SIGN[@]}" --preserve-metadata=entitlements "$FW/XPCServices/Downloader.xpc"
+"${SIGN[@]}" "$FW/Autoupdate"
+"${SIGN[@]}" "$FW/Updater.app"
+"${SIGN[@]}" "$APP/Contents/Frameworks/Sparkle.framework"
+"${SIGN[@]}" "$APP"
+codesign --verify --strict --deep "$APP"
 
 [ "${1:-}" = "--no-install" ] && { echo "✓ built $APP"; exit 0; }
 

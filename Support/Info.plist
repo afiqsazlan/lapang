@@ -2,15 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleIdentifier</key>
-	<string>com.afiqsazlan.lapang</string>
-	<key>CFBundleName</key>
-	<string>Lapang</string>
 	<key>CFBundleDisplayName</key>
+	<string>Lapang</string>
+	<key>CFBundleExecutable</key>
 	<string>Lapang</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
-	<key>CFBundleExecutable</key>
+	<key>CFBundleIdentifier</key>
+	<string>com.afiqsazlan.lapang</string>
+	<key>CFBundleName</key>
 	<string>Lapang</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
@@ -24,5 +24,15 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>MIT License</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUEnableSystemProfiling</key>
+	<false/>
+	<key>SUFeedURL</key>
+	<string>https://www.afiqsazlan.com/lapang/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>efUq2LHRJjVspj8SDw0uyTgrkQSpKU0/XzlJb+vFiC0=</string>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
 </dict>
 </plist>
