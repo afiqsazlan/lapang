@@ -8,6 +8,8 @@
 	<string>Headroom</string>
 	<key>CFBundleDisplayName</key>
 	<string>Headroom</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleExecutable</key>
 	<string>Headroom</string>
 	<key>CFBundlePackageType</key>

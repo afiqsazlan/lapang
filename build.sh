@@ -15,9 +15,10 @@ BIN="$(swift build -c release --show-bin-path)/Headroom"
 
 APP="build/Headroom.app"
 rm -rf build
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Headroom"
 cp Support/Info.plist "$APP/Contents/Info.plist"
+cp Support/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"  # regenerate with: xcrun swift Support/make-icon.swift
 
 if [ -n "${HEADROOM_SIGN_IDENTITY:-}" ]; then
   codesign --force --options runtime --timestamp --sign "$HEADROOM_SIGN_IDENTITY" "$APP"

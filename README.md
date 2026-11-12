@@ -1,4 +1,6 @@
-# Headroom
+<p align="center"><img src="docs/icon.png" width="128" alt="Headroom icon"></p>
+
+<h1 align="center">Headroom</h1>
 
 A small macOS menu bar app that keeps an eye on what quietly fills up a developer's Mac, and lets you clear it in a click.
 
@@ -87,6 +89,8 @@ A section is any executable. When run with no arguments, it prints JSON:
 The section runs on every refresh, so keep it fast (well under a second).
 
 ## Development
+
+The app icon is drawn in code: `xcrun swift Support/make-icon.swift` regenerates `Support/AppIcon.icns` and `docs/icon.png`.
 
 `Headroom --render out.png` draws the full panel off-screen with live data and exits. It's useful for checking layout without clicking around the menu bar. Add `--demo` to use built-in sample data and `--light` for the light appearance. The README screenshot is made with:
 

@@ -20,9 +20,21 @@ struct HeadroomApp: App {
             let out = args[i + 1]
             Task { @MainActor in await renderPanel(to: out) }
         } else {
+            Self.placeNearRightOnFirstLaunch()
             let m = Monitor()
             AppDelegate.monitor = m
             _monitor = StateObject(wrappedValue: m)
+        }
+    }
+
+    /// macOS adds new menu bar items at the far left, next to the notch, which is exactly where a
+    /// full menu bar hides them. On first launch only, start near the right instead (the position
+    /// is in points from the screen's right edge). Once the user Cmd-drags it, macOS saves their
+    /// spot under the same key and this never runs again.
+    private static func placeNearRightOnFirstLaunch() {
+        let key = "NSStatusItem Preferred Position Item-0"
+        if UserDefaults.standard.object(forKey: key) == nil {
+            UserDefaults.standard.set(280.0, forKey: key)
         }
     }
 
