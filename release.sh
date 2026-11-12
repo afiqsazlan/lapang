@@ -165,7 +165,7 @@ ARCHS="$(lipo -archs "$APP/Contents/MacOS/Lapang")"
 [[ "$ARCHS" == *arm64* && "$ARCHS" == *x86_64* ]] || die "expected a universal binary, got: $ARCHS"
 codesign --verify --strict --deep "$APP" || die "signature check failed"
 if [ "$SIGNED" = 1 ]; then
-  SIGN_INFO="$(codesign -dv "$APP" 2>&1)"
+  SIGN_INFO="$(codesign -dvv "$APP" 2>&1)"
   [[ "$SIGN_INFO" =~ flags=.*runtime ]] || die "app is not signed with the hardened runtime"
   [[ "$SIGN_INFO" == *"Authority=Developer ID Application"* ]] || die "app is not signed with Developer ID"
 fi
@@ -319,7 +319,7 @@ fi
 
 bold "7. Commit, tag, push"
 git add "$PLIST"
-git commit -q -m "Release $VERSION"
+git diff --cached --quiet || git commit -q -m "Release $VERSION"  # the first release may not change Info.plist
 git tag -a "$TAG" -m "Lapang $VERSION"
 git push -q origin main "$TAG" || die "push failed: the release commit and tag $TAG exist only locally"
 ok "pushed main and $TAG"
