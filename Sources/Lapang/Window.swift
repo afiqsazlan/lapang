@@ -53,8 +53,10 @@ extension Snapshot {
         }
         if let sims {
             pages.append(.init(id: "simulators", title: "Simulators", icon: "iphone", group: .dev,
-                               value: "\(sims.count)", attention: sims.contains { $0.usage.projectGone },
-                               subtitle: sims.isEmpty ? "None booted" : "\(sims.count) running",
+                               value: "\(sims.count)",
+                               attention: sims.contains { $0.usage.projectGone } || !(simStorage?.unavailable.isEmpty ?? true),
+                               subtitle: (sims.isEmpty ? "None booted" : "\(sims.count) running")
+                                   + (simStorage.map { " · \(human(bytes: $0.totalBytes)) in all" } ?? ""),
                                scrolls: false) { AnyView(SimulatorsPage(s: self)) })
         }
         if !worktrees.isEmpty {
@@ -302,14 +304,14 @@ private struct BigNumber: View {
 }
 
 /// A row's trailing number, right-aligned in its column.
-private struct Num: View {
+struct Num: View {
     let text: String
     var body: some View {
         Text(text).monospacedDigit().frame(maxWidth: .infinity, alignment: .trailing)
     }
 }
 
-private struct Footnote: View {
+struct Footnote: View {
     let text: String
     var body: some View {
         Text(text).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -665,39 +667,6 @@ struct ProcessesPage: View {
 
     func reveal(_ ids: Set<pid_t>) {
         for p in s.procs where ids.contains(p.pid) && !p.cwd.isEmpty { m.reveal(p.cwd) }
-    }
-}
-
-struct SimulatorsPage: View {
-    @EnvironmentObject var m: Monitor
-    let s: Snapshot
-
-    var body: some View {
-        let sims = s.sims ?? []
-        VStack(alignment: .leading, spacing: 10) {
-            Table(sims) {
-                TableColumn("Simulator") { sim in
-                    HStack(spacing: 5) {
-                        Text(sim.name)
-                        if sim.usage.projectGone { Tag(text: "project gone", color: .orange) }
-                    }
-                    .help(sim.usage.detail)
-                }
-                TableColumn("Running") { sim in Text(sim.usage.apps.map(\.name).joined(separator: ", ")) }
-                TableColumn("Project") { sim in Text(sim.usage.projectShort ?? "").foregroundStyle(.secondary) }
-                TableColumn("Started with") { sim in
-                    Text([sim.usage.tool, sim.usage.launcher.map { "from " + $0 }].compactMap { $0 }.joined(separator: " "))
-                        .foregroundStyle(.secondary)
-                }
-                TableColumn("") { sim in SimAction(sim: sim).environmentObject(m) }
-                    .width(28)
-            }
-            .tableStyle(.inset(alternatesRowBackgrounds: false))
-            if sims.count > 1 {
-                Button("Shut down all \(sims.count)") { m.act("sims") { Actions.shutdownAllSims(sims) } }
-                    .disabled(m.running.contains("sims"))
-            }
-        }
     }
 }
 

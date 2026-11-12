@@ -147,7 +147,40 @@ enum Demo {
                                     output: output, error: nil)]
         )
         snap.ports = ports
+        snap.simStorage = simStorage(now)
         return snap
+    }
+
+    static func simStorage(_ now: Date) -> SimStorage {
+        let rt = "com.apple.CoreSimulator.SimRuntime.iOS-"
+        let day: (Double) -> Date = { now.addingTimeInterval(-$0 * 86400) }
+        func dev(_ udid: String, _ name: String, _ v: String, _ state: String = "Shutdown", gb: Double, booted: Date?,
+                 error: String? = nil) -> SimDevice {
+            SimDevice(udid: udid, name: name, runtimeID: rt + v, state: state, available: error == nil, availabilityError: error,
+                      lastBooted: booted, dataBytes: Int64(gb * 1_073_741_824), logBytes: nil)
+        }
+        var devices = [
+            dev("A", "iPhone 16 Pro", "18-4", "Booted", gb: 6.4, booted: day(0.1)),
+            dev("B", "iPad Air 13-inch (M2)", "18-4", "Booted", gb: 3.1, booted: day(0.2)),
+            dev("C", "iPhone 15", "18-4", gb: 4.8, booted: day(6)),
+            dev("D", "iPhone 17", "26-1", gb: 2.2, booted: day(1)),
+            dev("E", "iPhone SE (3rd generation)", "17-5", gb: 1.1, booted: day(150)),
+            dev("F", "iPhone 14", "16-4", gb: 0.7, booted: day(400), error: "runtime profile not found"),
+            dev("G", "iPad (10th generation)", "16-4", gb: 0.2, booted: day(420), error: "runtime profile not found"),
+        ]
+        let blank = ["iPhone 16", "iPhone 16 Plus", "iPhone 16e", "iPad mini (A17 Pro)", "iPhone Air", "iPad Pro 11-inch (M4)"]
+        for (i, name) in blank.enumerated() {
+            devices.append(dev("N\(i)", name, i % 2 == 0 ? "26-1" : "18-4", gb: 0.017, booted: nil))
+        }
+        let runtimes = [
+            SimRuntime(id: "R1", runtimeID: rt + "26-1", version: "26.1", build: "23B80", bytes: 8_400_000_000, deletable: true, lastUsed: day(1)),
+            SimRuntime(id: "R2", runtimeID: rt + "18-4", version: "18.4", build: "22E238", bytes: 8_800_000_000, deletable: true, lastUsed: day(0.1)),
+            SimRuntime(id: "R3", runtimeID: rt + "17-5", version: "17.5", build: "21F79", bytes: 7_100_000_000, deletable: true, lastUsed: day(150)),
+        ]
+        var sizes: [String: Int64] = [SimStorage.dyldRoot: 10_400_000]
+        for (r, kb) in zip(runtimes, [3_900_000, 3_600_000, 2_900_000] as [Int64]) { sizes[r.dyldPath] = kb }
+        SimStorage.useDemoDyld(sizes)
+        return SimStorage(devices: devices.sorted { $0.bytes > $1.bytes }, runtimes: runtimes)
     }
 
     /// A day and a half of the action log, newest first.
