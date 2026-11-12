@@ -281,7 +281,7 @@ cask "lapang" do
   url "https://github.com/$REPO/releases/download/v#{version}/Lapang-#{version}.zip"
   name "Lapang"
   desc "Menu bar app that keeps an eye on what fills a developer's Mac"
-  homepage "https://www.afiqsazlan.com/tools/lapang"
+  homepage "https://afiqsazlan.com/tools/lapang"
 
   livecheck do
     url "https://www.afiqsazlan.com/lapang/appcast.xml"
