@@ -6,7 +6,7 @@ import Foundation
 // what they would do unless --yes is given, so an agent can show you first and then confirm.
 
 enum CLI {
-    static let commands: Set<String> = ["status", "clean", "kill-old-mcp", "quit", "log", "ports", "stop-port", "share", "report", "help", "--help", "--version", "version"]
+    static let commands: Set<String> = ["status", "clean", "kill-old-mcp", "quit", "log", "ports", "stop-port", "share", "report", "mcp", "help", "--help", "--version", "version"]
 
     /// Runs a command and exits when the binary was started with one; otherwise returns and the app starts.
     static func runIfRequested() {
@@ -25,6 +25,7 @@ enum CLI {
         case "stop-port": code = stopPort(rest)
         case "share": code = share(rest)
         case "report": code = report(rest)
+        case "mcp": code = rest.contains("--config") ? MCPServer.printConfig() : MCPServer.run()
         case "--version", "version": code = version()
         default: code = help()
         }
@@ -483,6 +484,9 @@ enum CLI {
                                        prints its path). Redacts your user name, host names and folder
                                        names under home unless --full; --copy puts a summary on the
                                        clipboard; --limit sets how many log entries (20). Sends nothing.
+        lapang mcp                   an MCP server on stdin/stdout, so Claude can check this Mac and
+                                       run these actions (they preview until called with confirm: true)
+        lapang mcp --config          the Claude Desktop config entry for this install
         lapang --version             the installed version and build number
 
         Actions only print what they would do unless --yes is given.

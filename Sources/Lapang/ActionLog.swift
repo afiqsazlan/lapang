@@ -7,7 +7,7 @@ import Foundation
 
 struct ActionEntry: Codable {
     let time: Date
-    /// `panel` (menu bar or window) or `cli`.
+    /// `panel` (menu bar or window), `cli` or `mcp` (Claude, through `lapang mcp`).
     let source: String
     let action: String
     /// A few words for the menu and `lapang log`, e.g. the project or process name.
