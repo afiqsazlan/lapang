@@ -172,6 +172,11 @@ fi
 REPORTED="$("$APP/Contents/MacOS/Lapang" --version)"
 [ "$REPORTED" = "lapang $VERSION ($BUILD)" ] || die "lapang --version says \"$REPORTED\", expected $VERSION ($BUILD)"
 ok "built $APP ($ARCHS)"
+# Work on a copy: macOS can write-protect an app bundle it has assessed (App Management),
+# which makes stapler fail with error 73 on the one in build/.
+ditto --noextattr --noqtn "$APP" "$WORK/Lapang.app"
+APP="$WORK/Lapang.app"
+codesign --verify --strict --deep "$APP" || die "signature check failed on the staging copy"
 
 # ---------------------------------------------------------------- 4 notarize
 
@@ -188,7 +193,7 @@ if [ "$NOTARIZE" = 1 ]; then
     die "notarization $STATUS (submission $SUB_ID)"
   fi
   ok "notarized (submission $SUB_ID)"
-  # the ticket can take a minute to reach Apple's CDN after "Accepted" (stapler error 73)
+  # the ticket can take a moment to reach Apple's CDN after "Accepted"
   for try in 1 2 3 4 5 6; do
     xcrun stapler staple "$APP" && break
     [ "$try" = 6 ] && die "stapling failed"
