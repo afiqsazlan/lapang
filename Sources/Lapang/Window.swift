@@ -591,11 +591,14 @@ struct MemoryPage: View {
 }
 
 private struct MemoryUsersTable: View {
+    @EnvironmentObject var m: Monitor
     let s: Snapshot
     @State private var order = [KeyPathComparator(\MemoryUser.bytes, order: .reverse)]
 
     var body: some View {
         let top = Double(s.memUsers.map(\.bytes).max() ?? 1)
+        // Table cells get their own hosting views, which can lose the monitor while the table
+        // scrolls, so every action cell is handed it again.
         Table(s.memUsers.sorted(using: order), sortOrder: $order) {
             TableColumn("App", value: \.name)
             TableColumn("Memory", value: \.bytes) { u in Num(text: human(bytes: Int64(u.bytes))) }
@@ -604,7 +607,7 @@ private struct MemoryUsersTable: View {
                 .width(min: 60, ideal: 70, max: 90)
             TableColumn("") { u in Bar(value: Double(u.bytes) / top, color: Color.secondary.opacity(0.6), height: 5) }
                 .width(min: 60, ideal: 160)
-            TableColumn("") { u in MemoryUserAction(u: u, s: s) }
+            TableColumn("") { u in MemoryUserAction(u: u, s: s).environmentObject(m) }
                 .width(28)
         }
         .tableStyle(.inset(alternatesRowBackgrounds: false))
@@ -648,7 +651,7 @@ struct ProcessesPage: View {
                     .width(min: 64, ideal: 76, max: 90)
                 TableColumn("Up", value: \.started) { p in Num(text: p.uptime) }
                     .width(min: 56, ideal: 64, max: 80)
-                TableColumn("") { p in ProcessAction(p: p, s: s) }
+                TableColumn("") { p in ProcessAction(p: p, s: s).environmentObject(m) }
                     .width(28)
             }
             .tableStyle(.inset(alternatesRowBackgrounds: false))
@@ -686,7 +689,7 @@ struct SimulatorsPage: View {
                     Text([sim.usage.tool, sim.usage.launcher.map { "from " + $0 }].compactMap { $0 }.joined(separator: " "))
                         .foregroundStyle(.secondary)
                 }
-                TableColumn("") { sim in SimAction(sim: sim) }
+                TableColumn("") { sim in SimAction(sim: sim).environmentObject(m) }
                     .width(28)
             }
             .tableStyle(.inset(alternatesRowBackgrounds: false))
@@ -742,7 +745,7 @@ struct WorktreesPage: View {
                 .width(min: 70, ideal: 80, max: 100)
                 TableColumn("Last used", value: \.lastActivity) { u in Num(text: u.activityText) }
                     .width(min: 60, ideal: 70, max: 90)
-                TableColumn("") { u in WorktreeAction(u: u) }
+                TableColumn("") { u in WorktreeAction(u: u).environmentObject(m) }
                     .width(50)
             }
             .tableStyle(.inset(alternatesRowBackgrounds: false))
@@ -792,7 +795,7 @@ struct PortsPage: View {
                     .width(min: 64, ideal: 76, max: 90)
                 TableColumn("Up", value: \.started) { l in Num(text: l.uptime) }
                     .width(min: 56, ideal: 64, max: 80)
-                TableColumn("") { l in PortAction(l: l) }
+                TableColumn("") { l in PortAction(l: l).environmentObject(m) }
                     .width(50)
             }
             .tableStyle(.inset(alternatesRowBackgrounds: false))
@@ -867,7 +870,7 @@ struct XcodePage: View {
                     Num(text: e.idleDays == 0 ? "today" : (e.idleDays == 1 ? "yesterday" : "\(e.idleDays) days ago"))
                 }
                 .width(min: 70, ideal: 84, max: 100)
-                TableColumn("") { e in DerivedAction(e: e, root: s.derivedDataRoot) }
+                TableColumn("") { e in DerivedAction(e: e, root: s.derivedDataRoot).environmentObject(m) }
                     .width(28)
             }
             .tableStyle(.inset(alternatesRowBackgrounds: false))
@@ -908,7 +911,7 @@ struct CachesPage: View {
                 TableColumn("", value: \.sortKB) { c in Bar(value: Double(max(c.sortKB, 0)) / top, color: Color.secondary.opacity(0.6), height: 5) }
                     .width(min: 40, ideal: 90)
                 TableColumn("Note", value: \.noteText) { c in Text(c.noteText).foregroundStyle(.secondary) }
-                TableColumn("") { c in CacheAction(c: c) }
+                TableColumn("") { c in CacheAction(c: c).environmentObject(m) }
                     .width(28)
             }
             .tableStyle(.inset(alternatesRowBackgrounds: false))
