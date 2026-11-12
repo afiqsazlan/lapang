@@ -20,6 +20,7 @@ struct Snapshot {
     var memSpikes: [PressureSpike] = []  // last 7 days
 
     var sims: [Sim]?  // nil when Xcode's simctl isn't available
+    var simStorage: SimStorage? = nil
     var procs: [DevProc]
     var ports: [Listener] = []
     var derivedDataRoot: String
@@ -160,12 +161,13 @@ enum Engine {
         let history = History.record(freeGB: freeGB)
         let derived = derivedData(root: root, config: config.xcode)
         let caches = caches(hidden: config.caches.hide)
+        let devices = SimStorage.loadDevices()
         let snap = Snapshot(
             config: config, configError: configError,
             freeBytes: free, totalBytes: total,
             pressure: sysctlInt("kern.memorystatus_vm_pressure_level") ?? 1,
             swapUsed: swapUsed, swapTotal: swapTotal,
-            sims: simulators(),
+            sims: simulators(devices),
             procs: processes(named: config.processes.names),
             derivedDataRoot: root,
             derived: derived,
@@ -178,6 +180,7 @@ enum Engine {
             sections: Sections.run(config.sections)
         )
         var full = snap
+        full.simStorage = devices.map { SimStorage(devices: $0, runtimes: SimStorage.loadRuntimes()) }
         let pressure = full.pressure
         full.memUsed = MemoryProbe.used()
         let point = MemoryPoint(t: Date(), pressure: pressure, swapGB: Double(swapUsed) / 1_073_741_824,
@@ -219,18 +222,9 @@ enum Engine {
 
     // MARK: Simulators
 
-    static func simulators() -> [Sim]? {
-        struct List: Decodable {
-            struct Device: Decodable { let udid: String; let name: String; let state: String }
-            let devices: [String: [Device]]
-        }
-        guard let r = Shell.run("/usr/bin/xcrun", ["simctl", "list", "devices", "booted", "-j"]), r.status == 0,
-              let list = try? JSONDecoder().decode(List.self, from: r.out)
-        else { return nil }
-        var sims = list.devices.values.flatMap { $0 }
-            .filter { $0.state == "Booted" }
-            .map { Sim(udid: $0.udid, name: $0.name) }
-            .sorted { $0.name < $1.name }
+    static func simulators(_ devices: [SimDevice]?) -> [Sim]? {
+        guard let devices else { return nil }
+        var sims = devices.filter(\.booted).map { Sim(udid: $0.udid, name: $0.name) }.sorted { $0.name < $1.name }
         attachUsage(&sims)
         return sims
     }
@@ -636,5 +630,6 @@ extension Snapshot {
     /// Everything the background size check measures.
     var measuredPaths: [String] {
         [derivedDataRoot] + derived.map(\.path) + caches.map(\.path) + config.disk.watch.map(Paths.expand)
+            + (simStorage?.measuredPaths ?? [])
     }
 }

@@ -489,6 +489,8 @@ struct Chore: Identifiable {
         case simulators([Sim])
         case port(Listener)
         case worktrees([WorktreeUnit])
+        case simRuntime(SimRuntime, SimStorage)
+        case simUnavailable([SimDevice])
     }
     let id: String
     let icon: String
@@ -498,6 +500,8 @@ struct Chore: Identifiable {
     let kind: Kind
     let kb: Int64
     var help: String? = nil
+    /// Runtimes are a re-download, so Clean all leaves them to be deleted one by one.
+    var inCleanAll: Bool { if case .simRuntime = kind { return false }; return true }
 }
 
 extension Snapshot {
@@ -560,6 +564,22 @@ extension Snapshot {
                                  button: "Shut down", kind: .simulators(rest), kb: 0))
             }
         }
+        if let st = simStorage {
+            let gone = st.unavailable
+            if !gone.isEmpty {
+                let kb = gone.reduce(0) { $0 + $1.bytes } / 1024
+                out.append(Chore(id: "sim-unavailable", icon: "iphone.slash",
+                                 title: gone.count == 1 ? "1 unavailable simulator" : "\(gone.count) unavailable simulators",
+                                 subtitle: "Runtime gone, can't boot · \(human(kb: kb))",
+                                 button: "Delete", kind: .simUnavailable(gone), kb: kb))
+            }
+            for r in st.idleRuntimes {
+                out.append(Chore(id: "rt-\(r.id)", icon: "iphone.gen1", title: "\(r.name) runtime",
+                                 subtitle: "Unused since \(whenText(r.lastUsed)) · \(human(bytes: r.bytes))",
+                                 button: "Delete", kind: .simRuntime(r, st), kb: r.bytes / 1024,
+                                 help: "\(st.devices(on: r).count) devices use it; they become unavailable. Xcode can download it again."))
+            }
+        }
         return out
     }
 }
@@ -573,6 +593,8 @@ struct ChoresBlock: View {
     var body: some View {
         let chores = s.chores
         let total = chores.reduce(Int64(0)) { $0 + $1.kb }
+        let bulk = chores.filter(\.inCleanAll)
+        let bulkTotal = bulk.reduce(Int64(0)) { $0 + $1.kb }
         VStack(alignment: .leading, spacing: 0) {
             if chores.isEmpty {
                 HStack(spacing: 8) {
@@ -585,8 +607,8 @@ struct ChoresBlock: View {
                     Circle().fill(Color.orange).frame(width: 6, height: 6)
                     Text(chores.count == 1 ? "1 thing to clean" : "\(chores.count) things to clean").fontWeight(.medium)
                     Spacer()
-                    if wide && chores.count > 1 {
-                        cleanAllButton(chores, total).frame(width: 170)
+                    if wide && bulk.count > 1 {
+                        cleanAllButton(bulk, bulkTotal).frame(width: 170)
                     } else if total > 0 {
                         Text(human(kb: total)).foregroundStyle(.secondary)
                     }
@@ -600,8 +622,8 @@ struct ChoresBlock: View {
                         }
                     }
                 }
-                if chores.count > 1 && !wide {
-                    cleanAllButton(chores, total).padding(.top, 8)
+                if bulk.count > 1 && !wide {
+                    cleanAllButton(bulk, bulkTotal).padding(.top, 8)
                 }
             }
         }
@@ -642,11 +664,16 @@ struct ChoresBlock: View {
             m.act(c.id, confirm: PortActions.confirm(l)) { PortActions.stop(l) }
         case .worktrees(let list):
             m.act(c.id, confirm: WorktreesFold.cleanConfirm(list)) { WorktreeActions.cleanOutput(list) }
+        case .simRuntime(let r, let st):
+            m.act(c.id, confirm: r.deleteConfirm(st)) { SimActions.deleteRuntime(r) }
+        case .simUnavailable(let list):
+            m.act(c.id, confirm: unavailableConfirm(list)) { SimActions.deleteUnavailable() }
         }
     }
 
     func cleanAll(_ chores: [Chore]) {
         var caches: [DerivedEntry] = [], procs: [DevProc] = [], sims: [Sim] = [], servers: [Listener] = [], trees: [WorktreeUnit] = []
+        var unavailable: [SimDevice] = []
         for c in chores {
             switch c.kind {
             case .cache(let e): caches.append(e)
@@ -654,6 +681,8 @@ struct ChoresBlock: View {
             case .simulators(let list): sims += list
             case .port(let l): servers.append(l)
             case .worktrees(let list): trees += list
+            case .simUnavailable(let list): unavailable += list
+            case .simRuntime: break
             }
         }
         var parts: [String] = []
@@ -666,7 +695,9 @@ struct ChoresBlock: View {
         }
         if !sims.isEmpty { parts.append("shut down the simulators") }
         if !trees.isEmpty { parts.append("delete the build output of \(trees.count) merged worktree\(trees.count == 1 ? "" : "s")") }
+        if !unavailable.isEmpty { parts.append("delete \(unavailable.count) unavailable simulator\(unavailable.count == 1 ? "" : "s")") }
         let root = s.derivedDataRoot
+        let deleteUnavailable = !unavailable.isEmpty
         let (toDelete, toKill, shutDown, toStop, toClean) = (caches, procs, sims, servers, trees)
         m.act("clean-all", confirm: .init(title: "Clean all?", message: "This will " + parts.joined(separator: ", ") + ".",
                                           button: "Clean all")) {
@@ -677,6 +708,7 @@ struct ChoresBlock: View {
                 for sim in shutDown { _ = Actions.shutdownSim(sim) }
                 for l in toStop { _ = PortActions.stop(l) }
                 if !toClean.isEmpty { _ = WorktreeActions.cleanOutput(toClean) }
+                if deleteUnavailable { _ = SimActions.deleteUnavailable() }
                 return msg
             }
         }
@@ -1231,26 +1263,6 @@ struct PortAction: View {
             } else {
                 Image(systemName: "lock").foregroundStyle(.tertiary).frame(width: 22)
                     .help(l.stopNote ?? "")
-            }
-        }
-    }
-}
-
-struct SimFold: View {
-    @EnvironmentObject var m: Monitor
-    let s: Snapshot
-
-    var body: some View {
-        let sims = s.sims ?? []
-        Fold("Simulators", icon: "iphone", value: sims.isEmpty ? "None running" : "\(sims.count) running") {
-            if sims.isEmpty {
-                Text("None booted").font(.callout).foregroundStyle(.secondary).padding(.vertical, 4)
-            }
-            ForEach(sims) { sim in
-                ItemRow(title: sim.name, subtitle: sim.usage.summary,
-                        tags: sim.usage.projectGone ? ["project gone"] : [], help: sim.usage.detail) { hovering in
-                    SimAction(sim: sim, visible: hovering)
-                }
             }
         }
     }

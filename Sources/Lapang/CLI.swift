@@ -6,7 +6,7 @@ import Foundation
 // what they would do unless --yes is given, so an agent can show you first and then confirm.
 
 enum CLI {
-    static let commands: Set<String> = ["status", "clean", "kill-old-mcp", "quit", "log", "ports", "stop-port", "share", "report", "mcp", "help", "--help", "--version", "version"]
+    static let commands: Set<String> = ["status", "clean", "kill-old-mcp", "quit", "log", "ports", "stop-port", "share", "report", "mcp", "sims", "help", "--help", "--version", "version"]
 
     /// Runs a command and exits when the binary was started with one; otherwise returns and the app starts.
     static func runIfRequested() {
@@ -26,6 +26,7 @@ enum CLI {
         case "share": code = share(rest)
         case "report": code = report(rest)
         case "mcp": code = rest.contains("--config") ? MCPServer.printConfig() : MCPServer.run()
+        case "sims": code = sims(rest)
         case "--version", "version": code = version()
         default: code = help()
         }
@@ -90,6 +91,11 @@ enum CLI {
             for sim in sims {
                 out.append("  - \(sim.name): \(sim.usage.summary ?? "no app of yours running")\(sim.usage.projectGone ? " (project deleted)" : "")")
             }
+        }
+        if let st = s.simStorage {
+            out.append("Simulator storage: \(human(bytes: st.totalBytes)) · devices \(human(bytes: st.devicesBytes)) (\(st.devices.count))"
+                + " · runtimes \(human(bytes: st.runtimesBytes)) (\(st.runtimes.count)) · dyld cache \(human(kb: st.dyldKB))"
+                + (st.unavailable.isEmpty ? "" : " · \(st.unavailable.count) unavailable") + ". `lapang sims` for details")
         }
         let caches = s.caches.reduce(Int64(0)) { $0 + ($1.sizeKB ?? 0) }
         out.append("Caches: Xcode \(human(kb: s.derivedTotalKB)) (\(s.derived.count) projects) · packages \(human(kb: caches))"
@@ -174,6 +180,7 @@ enum CLI {
                 "project": opt($0.usage.project), "projectGone": $0.usage.projectGone,
                 "tool": opt($0.usage.tool), "launcher": opt($0.usage.launcher),
             ] },
+            "simulatorStorage": opt(s.simStorage.map(simJSON)),
             "processes": s.procs.map { [
                 "pid": $0.pid, "name": $0.name, "kind": $0.kind, "bytes": $0.rssBytes,
                 "folder": $0.cwd, "stale": $0.stale, "uptime": $0.uptime,
@@ -213,8 +220,14 @@ enum CLI {
             case .simulators: return only.contains("simulators")
             case .port: return only.contains("ports")
             case .worktrees: return only.contains("worktrees")
+            case .simUnavailable: return only.contains("simulators")
+            case .simRuntime: return false
             }
         }
+        let runtimes = s.chores.compactMap { c -> SimRuntime? in if case .simRuntime(let r, _) = c.kind { return r }; return nil }
+        let runtimeHint = runtimes.isEmpty ? nil
+            : "Unused simulator runtimes (\(runtimes.map { "\($0.name) \(human(bytes: $0.bytes))" }.joined(separator: ", "))) are left to `lapang sims delete-runtime <version>`."
+        defer { if let runtimeHint { print(runtimeHint) } }
         guard !chores.isEmpty else { print("Nothing to clean."); return 0 }
         guard args.contains("--yes") else {
             print("Would clean (run again with --yes to do it):")
@@ -230,6 +243,8 @@ enum CLI {
                 case .port(let l): result = PortActions.stop(l)
                 case .worktrees(let list): result = WorktreeActions.cleanOutput(list)
                 case .simulators(let list): result = list.compactMap(Actions.shutdownSim).first ?? "Shut down \(list.map(\.name).joined(separator: ", "))"
+                case .simUnavailable: result = SimActions.deleteUnavailable()
+                case .simRuntime: result = nil
                 }
                 print("  - \(c.title): \(result ?? "done")")
             }
@@ -487,6 +502,13 @@ enum CLI {
         lapang mcp                   an MCP server on stdin/stdout, so Claude can check this Mac and
                                        run these actions (they preview until called with confirm: true)
         lapang mcp --config          the Claude Desktop config entry for this install
+        lapang sims [--json] [--all]  disk use per simulator device, runtime and dyld cache
+        lapang sims erase <udid|name> [--yes]
+                                       reset a shut-down simulator to factory content
+        lapang sims delete-unavailable [--yes]
+                                       remove simulators whose runtime is gone
+        lapang sims delete-runtime <version|id> [--yes]
+                                       remove a simulator runtime nothing booted is using
         lapang --version             the installed version and build number
 
         Actions only print what they would do unless --yes is given.
