@@ -177,6 +177,23 @@ final class Monitor: ObservableObject {
         if let u = URL(string: link) { NSWorkspace.shared.open(u) }
     }
 
+    /// "Report an issue…": writes the redacted report to the Desktop, selects it in Finder, and opens
+    /// a new GitHub issue with a short body. The file is attached by hand; nothing is uploaded.
+    func reportIssue() {
+        guard let s = snap else { return }
+        Task {
+            let o = await Task.detached { Report.make(s, full: false) }.value
+            do {
+                let path = try Report.write(o)
+                reveal(path)
+                NSWorkspace.shared.open(Report.issueURL(o, file: path))
+                flash("Report saved to Desktop · drag it into the issue")
+            } catch {
+                flash("Couldn't save the report: \(error.localizedDescription)")
+            }
+        }
+    }
+
     func editConfig() {
         NSWorkspace.shared.open(URL(fileURLWithPath: Config.ensureFile()))
     }

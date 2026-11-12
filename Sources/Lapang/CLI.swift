@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 // `lapang <command>`: the panel as text or JSON, plus its actions, for terminals and for
@@ -5,7 +6,7 @@ import Foundation
 // what they would do unless --yes is given, so an agent can show you first and then confirm.
 
 enum CLI {
-    static let commands: Set<String> = ["status", "clean", "kill-old-mcp", "quit", "log", "ports", "stop-port", "share", "help", "--help", "--version", "version"]
+    static let commands: Set<String> = ["status", "clean", "kill-old-mcp", "quit", "log", "ports", "stop-port", "share", "report", "help", "--help", "--version", "version"]
 
     /// Runs a command and exits when the binary was started with one; otherwise returns and the app starts.
     static func runIfRequested() {
@@ -23,6 +24,7 @@ enum CLI {
         case "ports": code = ports(json: rest.contains("--json"))
         case "stop-port": code = stopPort(rest)
         case "share": code = share(rest)
+        case "report": code = report(rest)
         case "--version", "version": code = version()
         default: code = help()
         }
@@ -329,6 +331,42 @@ enum CLI {
         return 0
     }
 
+    // MARK: report
+
+    /// `lapang report [--out path] [--copy] [--full] [--limit N]`: a diagnostics file for a GitHub issue.
+    static func report(_ args: [String]) -> Int32 {
+        func value(_ flag: String) -> String? {
+            args.firstIndex(of: flag).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
+        }
+        var limit = 20
+        if let l = value("--limit") {
+            guard let n = Int(l), n > 0 else { print("--limit takes a positive number"); return 2 }
+            limit = n
+        }
+        let full = args.contains("--full")
+        let o = Report.make(snapshot(), full: full, logLimit: limit)
+        let path: String
+        do {
+            path = try Report.write(o, to: value("--out"))
+        } catch {
+            print("Couldn't write the report: \(error.localizedDescription)")
+            return 1
+        }
+        print(path)
+        print("")
+        print("It holds: " + o.contents.joined(separator: " · ") + ".")
+        print(full ? "Not redacted (--full): paths, folder names, your user name and host name appear as they are."
+            : "Redacted: your user name, host names, and folder names under your home folder (shown as hashes like ‹3fa2c1›). --full keeps them.")
+        if args.contains("--copy") {
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(o.clipboard(file: path), forType: .string)
+            print("Copied a Markdown summary to the clipboard.")
+        }
+        print("Nothing was sent anywhere. Read the file, then attach it to an issue: \(Report.issuesURL)")
+        return 0
+    }
+
     // MARK: ports
 
     static func portJSON(_ l: Listener) -> [String: Any] {
@@ -431,6 +469,11 @@ enum CLI {
                                        programs merely connected to it)
         lapang share [now|today|week|clean] [--ratio 16:9|1:1|4:5|9:16] [--out file.png] [--copy] [--names]
                                        a shareable PNG card of what this Mac went through; prints its path
+        lapang report [--out path] [--copy] [--full] [--limit N]
+                                       a diagnostics file to attach to a GitHub issue (Desktop by default;
+                                       prints its path). Redacts your user name, host names and folder
+                                       names under home unless --full; --copy puts a summary on the
+                                       clipboard; --limit sets how many log entries (20). Sends nothing.
         lapang --version             the installed version and build number
 
         Actions only print what they would do unless --yes is given.
