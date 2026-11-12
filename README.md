@@ -59,7 +59,7 @@ Every action that runs, from the panel or the command line, is written to `~/Lib
 
 ## Share cards
 
-Gear menu → **Share snapshot…** makes an image of what your Mac went through, for X, Threads, LinkedIn or Slack. You get a preview, **Copy image**, **Save…** and the macOS share sheet, or you can drag the preview out. There are four cards:
+The share button (↑) at the bottom of the panel makes an image of what your Mac went through, for X, Threads, LinkedIn or Slack. You get a preview, **Copy image**, **Save…** and the macOS share sheet, or you can drag the preview out. There are four cards:
 
 - **Right now**: memory by app against your physical RAM ("44 GB of apps on 16 GB of RAM"), today's swap and the share of time under pressure.
 - **Today**: a receipt of the day: simulators, projects and worktrees, Xcode builds, `flutter run`s, dev processes, MCP servers, Claude Code sessions, peak swap, lowest free disk, build caches. It ends with a strip showing memory pressure through the day.

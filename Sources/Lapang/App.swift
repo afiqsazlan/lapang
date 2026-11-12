@@ -184,11 +184,12 @@ struct Footer: View {
             }
             if m.refreshing { ProgressView().controlSize(.mini) }
             Spacer()
+            Button { ShareWindow.show(m) } label: { Image(systemName: "square.and.arrow.up") }
+                .buttonStyle(.borderless).help("Share a snapshot of your Mac")
+                .disabled(m.snap == nil)
             Button { Task { await m.refresh() } } label: { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(.borderless).help("Refresh now")
             Menu {
-                Button("Share snapshot…") { ShareWindow.show(m) }
-                Divider()
                 Toggle("Open at login", isOn: Binding(get: { atLogin }, set: setLogin))
                 Toggle(mcpToggleTitle, isOn: Binding(get: { m.snap?.config.processes.mcpCleanup.enabled ?? false },
                                                      set: { m.setMCPCleanup($0) }))
