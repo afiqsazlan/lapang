@@ -73,12 +73,32 @@ enum Demo {
         """
         let output = try? JSONDecoder().decode(SectionOutput.self, from: Data(section.utf8))
 
+        // a day of memory: calm overnight, under pressure through the working day
+        var memHistory: [MemoryPoint] = []
+        for i in stride(from: 1440, through: 0, by: -1) {
+            let t = now.addingTimeInterval(-Double(i) * 60)
+            let hour = Calendar.current.component(.hour, from: t)
+            let busy = (9 ..< 19).contains(hour)
+            let spike = busy && i % 97 < 6
+            memHistory.append(MemoryPoint(t: t, pressure: spike ? 4 : (busy && i % 7 != 0 ? 2 : 1),
+                                          swapGB: busy ? 4.5 : 1.2, usedGB: busy ? 31 : 22))
+        }
+        let memUsers = [
+            MemoryUser(name: "iOS Simulators", bytes: 6_100 << 20, processes: 64, kind: .simulators, bundlePath: nil),
+            MemoryUser(name: "Xcode", bytes: 4_300 << 20, processes: 9, kind: .app, bundlePath: "/Applications/Xcode.app"),
+            MemoryUser(name: "Google Chrome", bytes: 3_800 << 20, processes: 31, kind: .app, bundlePath: "/Applications/Google Chrome.app"),
+            MemoryUser(name: "Claude Code sessions", bytes: 2_600 << 20, processes: 6, kind: .other, bundlePath: nil),
+            MemoryUser(name: "Slack", bytes: 1_100 << 20, processes: 7, kind: .app, bundlePath: "/Applications/Slack.app"),
+            MemoryUser(name: "Dart and Flutter", bytes: 945 << 20, processes: 4, kind: .other, bundlePath: nil),
+        ]
+
         var config = Config()
         config.xcode.protect = ["~/code/shop"]
         return Snapshot(
             config: config, configError: nil,
             freeBytes: Int64(freeGB * 1_073_741_824), totalBytes: 460 * 1_073_741_824,
-            pressure: 1, swapUsed: 2_200 << 20, swapTotal: 8_192 << 20,
+            pressure: 2, swapUsed: 4_600 << 20, swapTotal: 8_192 << 20,
+            memUsed: 31_400 << 20, memTotal: 36 << 30, memHistory: memHistory, memUsers: memUsers,
             sims: [
                 Sim(udid: "A", name: "iPhone 16 Pro", usage: SimUsage(
                     apps: [("Shop", "com.example.shop")], project: home + "/code/worktrees/checkout-redesign/shop",

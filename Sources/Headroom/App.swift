@@ -140,13 +140,13 @@ struct Panel: View {
             }
             Header(s: s)
             ChoresBlock(s: s)
+            if !s.memUsers.isEmpty { MemoryUsersFold(s: s) }
             GrowthFold(s: s)
             if !s.derived.isEmpty { XcodeFold(s: s) }
             if !s.caches.isEmpty { CachesFold(s: s) }
             if !s.config.processes.names.isEmpty { ProcessFold(s: s) }
             if s.sims != nil { SimFold(s: s) }
             ForEach(s.sections) { CustomFold(state: $0) }
-            MemoryFold(s: s)
         }
     }
 }

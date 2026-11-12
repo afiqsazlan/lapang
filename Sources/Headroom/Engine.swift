@@ -13,6 +13,11 @@ struct Snapshot {
     var swapUsed: UInt64
     var swapTotal: UInt64
 
+    var memUsed: UInt64 = 0
+    var memTotal: UInt64 = ProcessInfo.processInfo.physicalMemory
+    var memHistory: [MemoryPoint] = []  // last 24 hours, a point a minute
+    var memUsers: [MemoryUser] = []
+
     var sims: [Sim]?  // nil when Xcode's simctl isn't available
     var procs: [DevProc]
     var derivedDataRoot: String
@@ -78,7 +83,7 @@ struct DevProc: Identifiable {
     let ppid: pid_t
     let name: String
     let kind: String
-    let rssBytes: UInt64
+    let rssBytes: UInt64  // memory footprint (resident size when that's unavailable)
     let started: Date
     let cwd: String
     let stale: Bool
@@ -166,7 +171,14 @@ enum Engine {
             sizesMeasuredAt: SizeStore.shared.measuredAt,
             sections: Sections.run(config.sections)
         )
-        return snap
+        var full = snap
+        let pressure = full.pressure
+        full.memUsed = MemoryProbe.used()
+        full.memHistory = MemoryHistory.record(MemoryPoint(
+            t: Date(), pressure: pressure, swapGB: Double(swapUsed) / 1_073_741_824,
+            usedGB: Double(full.memUsed) / 1_073_741_824))
+        full.memUsers = MemoryProbe.users()
+        return full
     }
 
     // Disk: the data volume's real free space (what df reports), not "available for important usage".
@@ -305,7 +317,7 @@ enum Engine {
             let stale = ppid == 1 || (!cwd.isEmpty && !FileManager.default.fileExists(atPath: cwd))
             out.append(DevProc(
                 pid: pid, ppid: ppid, name: name, kind: kind(name: name, args: args(pid)),
-                rssBytes: task.pti_resident_size,
+                rssBytes: MemoryProbe.footprint(pid) ?? task.pti_resident_size,
                 started: Date(timeIntervalSince1970: TimeInterval(bsd.pbi_start_tvsec)),
                 cwd: cwd, stale: stale))
         }

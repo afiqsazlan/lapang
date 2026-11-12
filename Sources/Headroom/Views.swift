@@ -212,8 +212,92 @@ struct Header: View {
                 Sparkline(points: day, warn: s.config.disk.warnGB, trend: s.trend)
             }
             TrendLine(s: s)
+            Divider().padding(.vertical, 4)
+            MemoryLine(s: s)
         }
         .padding(14)
+    }
+}
+
+/// Memory sits in the header next to disk: pressure is the thing that slows a busy dev Mac down,
+/// and swap is where the two meet (it lives on the disk).
+struct MemoryLine: View {
+    let s: Snapshot
+
+    var body: some View {
+        let (label, color): (String, Color) = {
+            switch s.pressureLevel {
+            case .ok: return ("Normal", .secondary)
+            case .warn: return ("Under pressure", .orange)
+            case .crit: return ("Critical", .red)
+            }
+        }()
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("Memory").fontWeight(.medium)
+                if s.pressureLevel != .ok { Circle().fill(color).frame(width: 6, height: 6) }
+                Text(label).foregroundStyle(color)
+                Spacer()
+                Text(String(format: "%.1f of %.0f GB used", Double(s.memUsed) / 1_073_741_824,
+                            Double(s.memTotal) / 1_073_741_824))
+                    .foregroundStyle(.secondary).monospacedDigit()
+            }
+            .font(.callout)
+            PressureStrip(points: s.memHistory)
+            HStack {
+                Text(historyText).foregroundStyle(.secondary)
+                Spacer()
+                Text("swap \(human(bytes: Int64(s.swapUsed))) of \(human(bytes: Int64(s.swapTotal)))")
+                    .foregroundStyle(s.swapFraction > 0.8 ? Color.orange : Color.secondary).monospacedDigit()
+            }
+            .font(.caption)
+            if s.swapFraction > 0.8 && s.diskLevel != .ok {
+                Text("Swap lives on the disk and can't grow while it's this full. Freeing disk space helps memory too.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+        }
+        .help("Memory pressure is how hard macOS is working to find RAM. Swap is RAM spilled onto the disk.")
+    }
+
+    var historyText: String {
+        guard let share = MemoryHistory.pressuredShare(s.memHistory),
+              let first = s.memHistory.first else { return "Pressure history fills in over the next hours" }
+        let hours = Date().timeIntervalSince(first.t) / 3600
+        let window = hours >= 20 ? "the last 24 h" : (hours >= 1 ? "the last \(Int(hours)) h" : "the last \(Int(hours * 60)) min")
+        return share < 0.01 ? "No pressure in \(window)" : "Under pressure \(Int((share * 100).rounded()))% of \(window)"
+    }
+}
+
+/// The last 24 hours of memory pressure in 15-minute slices, like Activity Monitor's graph:
+/// grey when normal, orange under pressure, red when critical, faint where there's no data yet.
+struct PressureStrip: View {
+    let points: [MemoryPoint]
+
+    var body: some View {
+        Canvas { ctx, size in
+            let now = Date()
+            let slices = 96
+            let w = size.width / CGFloat(slices)
+            var worst = [Int](repeating: 0, count: slices)
+            for p in points {
+                let age = now.timeIntervalSince(p.t)
+                guard age >= 0, age < 86400 else { continue }
+                let i = slices - 1 - Int(age / 900)
+                worst[i] = max(worst[i], p.pressure)
+            }
+            for i in 0 ..< slices {
+                let color: Color = switch worst[i] {
+                case 0: .primary.opacity(0.06)
+                case 1: .secondary.opacity(0.45)
+                case 2, 3: .orange
+                default: .red
+                }
+                ctx.fill(Path(CGRect(x: CGFloat(i) * w, y: 0, width: w + 0.5, height: size.height)), with: .color(color))
+            }
+        }
+        .frame(height: 8)
+        .clipShape(Capsule())
+        .help("Memory pressure over the last 24 hours, oldest on the left")
     }
 }
 
@@ -303,6 +387,7 @@ struct Chore: Identifiable {
     let button: String
     let kind: Kind
     let kb: Int64
+    var help: String? = nil
 }
 
 extension Snapshot {
@@ -326,7 +411,9 @@ extension Snapshot {
             let kind = ProcessFold.kindName[p.kind] ?? p.name
             let place = p.cwd.split(separator: "/").suffix(2).joined(separator: "/")
             out.append(Chore(id: "kill-\(p.pid)", icon: "bolt.horizontal", title: place.isEmpty ? kind : place,
-                             subtitle: "\(kind), stale (\(why))", button: "Kill", kind: .process(p), kb: 0))
+                             subtitle: "\(kind) · stale · \(human(bytes: Int64(p.rssBytes)))",
+                             button: "Kill", kind: .process(p), kb: 0,
+                             help: "Stale because its \(why). Killing it frees \(human(bytes: Int64(p.rssBytes))) of memory."))
         }
         if let sims, !sims.isEmpty {
             // a simulator still running an app whose folder was deleted is its own chore
@@ -373,7 +460,7 @@ struct ChoresBlock: View {
                 ForEach(chores) { c in
                     HStack(spacing: 10) {
                         Image(systemName: c.icon).foregroundStyle(.secondary).frame(width: 18)
-                        ItemRow(title: c.title, subtitle: c.subtitle) { _ in
+                        ItemRow(title: c.title, subtitle: c.subtitle, help: c.help) { _ in
                             RowButton(key: c.id, title: c.button) { run(c) }
                         }
                     }
@@ -700,7 +787,8 @@ struct ProcessFold: View {
             if mcp.count > 1 {
                 let older = Array(mcp.dropLast())
                 let olderKids = s.procs.filter { p in older.contains { $0.pid == p.ppid } }
-                Button("Kill all MCP servers but the newest") {
+                let freed = (olderKids + older).reduce(UInt64(0)) { $0 + $1.rssBytes }
+                Button("Kill all MCP servers but the newest · frees \(human(bytes: Int64(freed)))") {
                     m.act("kill-old-mcp", confirm: .init(
                         title: "Kill \(older.count) older MCP servers?",
                         message: "Their sessions lose those tools until they restart. The newest one is kept.",
@@ -735,31 +823,38 @@ struct SimFold: View {
     }
 }
 
-struct MemoryFold: View {
+struct MemoryUsersFold: View {
+    @EnvironmentObject var m: Monitor
     let s: Snapshot
 
     var body: some View {
-        let pressure: String = {
-            switch s.pressureLevel {
-            case .ok: return "Normal"
-            case .warn: return "Under pressure"
-            case .crit: return "Critical"
-            }
-        }()
-        Fold("Memory", icon: "memorychip",
-             value: "swap \(human(bytes: Int64(s.swapUsed))) of \(human(bytes: Int64(s.swapTotal)))",
+        let top = s.memUsers.first
+        Fold("Memory users", icon: "memorychip",
+             value: top.map { "\($0.name) \(human(bytes: Int64($0.bytes)))" } ?? "",
              attention: s.pressureLevel != .ok) {
-            HStack {
-                Text("Memory pressure").foregroundStyle(.secondary)
-                Spacer()
-                Text(pressure).foregroundStyle(s.pressureLevel == .ok ? Color.primary : s.pressureLevel.color)
+            ForEach(s.memUsers) { u in
+                let subtitle = "\(human(bytes: Int64(u.bytes))) · \(u.processes) process\(u.processes == 1 ? "" : "es")"
+                ItemRow(title: u.name, subtitle: subtitle, help: u.bundlePath.map(Paths.abbreviate)) { hovering in
+                    switch u.kind {
+                    case .simulators where !(s.sims ?? []).isEmpty:
+                        HoverAction(key: "mem-sims", icon: "power", help: "Shut down all simulators", visible: hovering) {
+                            m.act("mem-sims") { Actions.shutdownAllSims() }
+                        }
+                    case .app where u.bundlePath.map(MemoryActions.isQuittable) == true:
+                        let bundle = u.bundlePath!
+                        HoverAction(key: "quit-\(u.name)", icon: "xmark.circle", help: "Quit \(u.name)", visible: hovering) {
+                            m.act("quit-\(u.name)", confirm: .init(
+                                title: "Quit \(u.name)?",
+                                message: "Frees about \(human(bytes: Int64(u.bytes))). It quits like choosing Quit from its menu, so it can still ask to save.",
+                                button: "Quit")) { MemoryActions.quit(bundlePath: bundle) }
+                        }
+                    default:
+                        Color.clear.frame(width: 22, height: 1)
+                    }
+                }
             }
-            .font(.callout).padding(.vertical, 4)
-            Bar(value: s.swapFraction, color: s.swapFraction > 0.8 ? .orange : .secondary)
-            if s.swapFraction > 0.8 && s.diskLevel != .ok {
-                Text("Swap is nearly full and can't grow on a nearly full disk. Freeing disk space helps memory too.")
-                    .font(.caption).foregroundStyle(.orange).padding(.top, 4)
-            }
+            Text("Memory footprint, as in Activity Monitor. Apps include their helper processes.")
+                .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
         }
     }
 }
