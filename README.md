@@ -125,7 +125,7 @@ To support these cards, Lapang keeps a row per day in `daily.json` (busiest mome
 
 ## Reporting a problem
 
-`lapang report` writes a Markdown file of diagnostics to your Desktop, for attaching to a [GitHub issue](https://github.com/afiqsazlan/lapang/issues/new), and prints its path. It holds:
+**Report an issue…** in the gear menu writes a Markdown file of diagnostics to your Desktop, selects it in Finder and opens a [new GitHub issue](https://github.com/afiqsazlan/lapang/issues/new) with a short prefilled body. Drag the file into the issue yourself. `lapang report` writes the same file and prints its path. It holds:
 
 - the Lapang and Sparkle versions, the macOS version and the chip
 - recent problems: a config that won't read, custom section errors, failed actions, Lapang crash reports

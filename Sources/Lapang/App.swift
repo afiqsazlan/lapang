@@ -232,6 +232,8 @@ struct GearMenu: View {
                 Button("Show log in Finder") { m.reveal(ActionLog.file) }
                     .disabled(!FileManager.default.fileExists(atPath: ActionLog.file))
             }
+            Button("Report an issue…") { m.reportIssue() }
+                .disabled(m.snap == nil)
             Divider()
             if updater.enabled {
                 Button(updater.available.map { "Update to \($0)…" } ?? "Check for Updates…") { updater.check() }
