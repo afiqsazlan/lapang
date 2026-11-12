@@ -38,16 +38,38 @@ The panel is for a quick glance. For everything at once, open the Lapang window:
 
 The sidebar follows what the panel shows: a section appears when there's something to show. The window is resizable and remembers its size, place and page. ⌘R refreshes and ⌘W closes it; Lapang stays in the menu bar.
 
-## Build and run
+## Install
 
-Requires macOS 14 or later and Xcode (or the Command Line Tools with Swift 5.10+).
+Requires macOS 14 or later, on Apple silicon or Intel.
+
+**Download:** get `Lapang-x.y.z.zip` from the [latest release](https://github.com/afiqsazlan/lapang/releases/latest), unzip it and move `Lapang.app` to Applications. It's signed and notarized by Apple, so it opens like any other app. To have it start at login, tick **Open at login** in the panel's gear menu. For the `lapang` command, link it into your PATH:
+
+```bash
+ln -s /Applications/Lapang.app/Contents/MacOS/Lapang /usr/local/bin/lapang
+```
+
+**Homebrew:** this also puts the `lapang` command on your PATH. Homebrew asks you to trust a tap before it installs from it:
+
+```bash
+brew trust --cask afiqsazlan/tap/lapang
+```
+
+```bash
+brew install --cask afiqsazlan/tap/lapang
+```
+
+Lapang updates itself (see below), so `brew upgrade` leaves it alone unless you pass `--greedy`.
+
+## Build from source
+
+Requires Xcode (or the Command Line Tools with Swift 5.10+).
 
 ```bash
 git clone https://github.com/afiqsazlan/lapang.git && cd lapang
 ./build.sh
 ```
 
-`build.sh` compiles a release build, installs `Lapang.app` into `~/Applications` and launches it. To have it start at login, tick **Open at login** in the panel's gear menu. Use `./build.sh --no-install` to only build `./build/Lapang.app`.
+`build.sh` compiles a release build, installs `Lapang.app` into `~/Applications` and launches it. Use `./build.sh --no-install` to only build `./build/Lapang.app`.
 
 ## Updates and privacy
 
