@@ -188,7 +188,12 @@ if [ "$NOTARIZE" = 1 ]; then
     die "notarization $STATUS (submission $SUB_ID)"
   fi
   ok "notarized (submission $SUB_ID)"
-  xcrun stapler staple "$APP" || die "stapling failed"
+  # the ticket can take a minute to reach Apple's CDN after "Accepted" (stapler error 73)
+  for try in 1 2 3 4 5 6; do
+    xcrun stapler staple "$APP" && break
+    [ "$try" = 6 ] && die "stapling failed"
+    warn "ticket not available yet; retrying in 20s"; sleep 20
+  done
   xcrun stapler validate "$APP" || die "stapled ticket doesn't validate"
   spctl --assess --type execute -vv "$APP" || die "Gatekeeper rejects the app"
   ok "stapled; Gatekeeper accepts it"
