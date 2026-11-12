@@ -188,6 +188,7 @@ enum Engine {
         if !wt.repos.isEmpty || !wt.roots.isEmpty {
             full.worktrees = WorktreeStore.shared.units(wt, agentFolders: agentFolders())
         }
+        Daily.record(full, memPoints: full.memHistory, diskPoints: history)
         return full
     }
 

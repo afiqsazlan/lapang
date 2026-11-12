@@ -118,6 +118,16 @@ enum MemoryHistory {
         return points.filter { p.t.timeIntervalSince($0.t) <= 86400 }
     }
 
+    /// Every stored sample, up to 7 days.
+    static func all() -> [MemoryPoint] {
+        lock.lock(); defer { lock.unlock() }
+        if let cache { return cache }
+        guard let d = FileManager.default.contents(atPath: file) else { return [] }
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .secondsSince1970
+        return (try? dec.decode([MemoryPoint].self, from: d)) ?? []
+    }
+
     /// Share of samples in the window that were under pressure (warning or worse).
     static func pressuredShare(_ points: [MemoryPoint]) -> Double? {
         guard points.count >= 10 else { return nil }

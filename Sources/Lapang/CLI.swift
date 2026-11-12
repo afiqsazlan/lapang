@@ -5,7 +5,7 @@ import Foundation
 // what they would do unless --yes is given, so an agent can show you first and then confirm.
 
 enum CLI {
-    static let commands: Set<String> = ["status", "clean", "kill-old-mcp", "quit", "log", "ports", "stop-port", "help", "--help"]
+    static let commands: Set<String> = ["status", "clean", "kill-old-mcp", "quit", "log", "ports", "stop-port", "share", "help", "--help"]
 
     /// Runs a command and exits when the binary was started with one; otherwise returns and the app starts.
     static func runIfRequested() {
@@ -22,6 +22,7 @@ enum CLI {
         case "log": code = log(rest)
         case "ports": code = ports(json: rest.contains("--json"))
         case "stop-port": code = stopPort(rest)
+        case "share": code = share(rest)
         default: code = help()
         }
         exit(code)
@@ -408,6 +409,8 @@ enum CLI {
         lapang stop-port <port> [--yes]
                                        SIGTERM to the process listening on that port (never to
                                        programs merely connected to it)
+        lapang share [now|today|week|clean] [--ratio 16:9|1:1|4:5|9:16] [--out file.png] [--copy] [--names]
+                                       a shareable PNG card of what this Mac went through; prints its path
 
         Actions only print what they would do unless --yes is given.
         """)

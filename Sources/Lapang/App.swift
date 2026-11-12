@@ -187,6 +187,8 @@ struct Footer: View {
             Button { Task { await m.refresh() } } label: { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(.borderless).help("Refresh now")
             Menu {
+                Button("Share snapshot…") { ShareWindow.show(m) }
+                Divider()
                 Toggle("Open at login", isOn: Binding(get: { atLogin }, set: setLogin))
                 Toggle(mcpToggleTitle, isOn: Binding(get: { m.snap?.config.processes.mcpCleanup.enabled ?? false },
                                                      set: { m.setMCPCleanup($0) }))

@@ -50,11 +50,36 @@ lapang kill-old-mcp    # every MCP server but the newest; add --yes to do it
 lapang kill-old-mcp --idle   # only those idle past idleHours, keeping keepNewest (--hours N, --keep N); add --yes
 lapang quit "Figma"    # ask an app from Memory users to quit; add --yes to do it
 lapang log             # what Lapang did: deleted, killed, shut down, and what it freed
+lapang share today     # a shareable PNG card of what this Mac went through; prints its path
 ```
 
 Actions only print what they would do until you add `--yes`. That makes it safe to hand to a coding agent: a Claude Code session (including one you drive from your phone with Remote Control) can run `lapang status`, tell you what's going on, and run the action once you agree.
 
 Every action that runs, from the panel or the command line, is written to `~/Library/Application Support/Lapang/actions.log`: one JSON line with the time, where it came from, exactly what was acted on (paths, pid, simulator udid, app bundle), the result, and the disk or memory it freed. Entries are kept for 30 days. Read it with `lapang log` (`--json`, `--limit N`) or under **Recent actions** in the gear menu. The log never leaves your Mac.
+
+## Share cards
+
+Gear menu → **Share snapshot…** makes an image of what your Mac went through, for X, Threads, LinkedIn or Slack. You get a preview, **Copy image**, **Save…** and the macOS share sheet, or you can drag the preview out. There are four cards:
+
+- **Right now**: memory by app against your physical RAM ("44 GB of apps on 16 GB of RAM"), today's swap and the share of time under pressure.
+- **Today**: a receipt of the day: simulators, projects and worktrees, Xcode builds, `flutter run`s, dev processes, MCP servers, Claude Code sessions, peak swap, lowest free disk, build caches. It ends with a strip showing memory pressure through the day.
+- **This week**: a 7-day × 24-hour pressure heatmap with the week's totals.
+- **After clean**: what the last "Clean all" shut down, stopped and deleted, and the RAM and disk it freed.
+
+Each comes in 16:9 (1200×675), 1:1 (1080×1080), 4:5 (1080×1350) and 9:16 (1080×1920), rendered at 2×.
+
+Cards show counts and sizes, never paths, user or host names, branches, the apps inside your simulators, custom sections or ports. Apps outside /Applications fold into "Other". **Show project names** adds worktree/repo names to the Today card, and it's off by default. Images are made on your Mac and nothing is uploaded.
+
+From the command line or a coding agent:
+
+```bash
+lapang share today --ratio 4:5            # writes the PNG and prints its path
+lapang share now --ratio 16:9 --copy      # also puts it on the clipboard
+lapang share week --out ~/Desktop/week.png
+lapang share clean --demo                 # sample data, for trying layouts
+```
+
+To support these cards, Lapang keeps a row per day in `daily.json` (busiest moment, `flutter run`s, project folders, builds), kept for 400 days. Claude Code sessions are counted from transcript file dates in `~/.claude/projects` when a card is made; their contents are never read. Set `"share": { "weeklyRecap": true }` in the config for a Monday-morning notification that opens the weekly card.
 
 ## Configuration
 
@@ -80,6 +105,7 @@ Gear menu → **Edit config…** opens `~/.config/lapang/config.json`, creating 
     "removeCommand": "git -C {repo} worktree remove {path}",
     "idleDays": 3
   },
+  "share": { "weeklyRecap": false },
   "sections": [
     { "title": "Servers", "icon": "server.rack", "command": "~/.config/lapang/sections/servers.sh" }
   ]
