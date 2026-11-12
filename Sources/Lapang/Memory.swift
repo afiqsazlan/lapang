@@ -128,10 +128,29 @@ enum MemoryHistory {
 enum MemoryActions {
     /// Asks a running app to quit, the same as choosing Quit from its menu (it can still ask to save).
     static func quit(bundlePath: String) -> String? {
+        let name = ((bundlePath as NSString).lastPathComponent as NSString).deletingPathExtension
         let running = NSWorkspace.shared.runningApplications.filter { $0.bundleURL?.path == bundlePath }
+        // what it was using, helpers included; the app can still refuse to quit, so this is an upper bound
+        let footprint = running.isEmpty ? nil : bundleFootprint(bundlePath)
+        let asked = running.filter { $0.terminate() }
+        ActionLog.record("quit app", title: name,
+                         target: ["name": name, "bundle": bundlePath,
+                                  "pids": running.map { "\($0.processIdentifier)" }.joined(separator: ",")],
+                         result: running.isEmpty ? "no longer running" : (asked.isEmpty ? "quit request not delivered (it may have already quit)" : nil),
+                         memoryFreed: asked.isEmpty ? nil : footprint.map(Int64.init))
         guard !running.isEmpty else { return "It's no longer running" }
-        running.forEach { $0.terminate() }
-        return "Asked \(((bundlePath as NSString).lastPathComponent as NSString).deletingPathExtension) to quit"
+        return "Asked \(name) to quit"
+    }
+
+    private static func bundleFootprint(_ bundlePath: String) -> UInt64 {
+        let count = proc_listallpids(nil, 0)
+        guard count > 0 else { return 0 }
+        var pids = [pid_t](repeating: 0, count: Int(count) + 64)
+        let n = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+        return pids.prefix(Int(max(n, 0))).reduce(0) { sum, pid in
+            guard pid > 0, Engine.execPath(pid)?.hasPrefix(bundlePath + "/") == true else { return sum }
+            return sum + (MemoryProbe.footprint(pid) ?? 0)
+        }
     }
 
     static func isQuittable(_ bundlePath: String) -> Bool {

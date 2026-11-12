@@ -497,36 +497,36 @@ struct ChoresBlock: View {
             m.act(c.id) { Actions.kill(p) }
         case .simulators(let list):
             let all = list.count == (s.sims?.count ?? 0)
-            let udids = list.map(\.udid)
-            m.act(c.id) { all ? Actions.shutdownAllSims() : udids.compactMap(Actions.shutdownSim).first }
+            m.act(c.id) { all ? Actions.shutdownAllSims(list) : list.compactMap(Actions.shutdownSim).first }
         }
     }
 
     func cleanAll(_ chores: [Chore]) {
-        var caches: [DerivedEntry] = [], procs: [DevProc] = [], simIDs: [String] = []
+        var caches: [DerivedEntry] = [], procs: [DevProc] = [], sims: [Sim] = []
         for c in chores {
             switch c.kind {
             case .cache(let e): caches.append(e)
             case .process(let p): procs.append(p)
-            case .simulators(let list): simIDs += list.map(\.udid)
+            case .simulators(let list): sims += list
             }
         }
-        let sims = !simIDs.isEmpty
         var parts: [String] = []
         if !caches.isEmpty {
             parts.append("delete \(caches.count) build cache\(caches.count == 1 ? "" : "s") (\(human(kb: caches.reduce(0) { $0 + ($1.sizeKB ?? 0) })))")
         }
         if !procs.isEmpty { parts.append("kill \(procs.count) stale process\(procs.count == 1 ? "" : "es")") }
-        if sims { parts.append("shut down the simulators") }
+        if !sims.isEmpty { parts.append("shut down the simulators") }
         let root = s.derivedDataRoot
-        let (toDelete, toKill, shutDown) = (caches, procs, simIDs)
+        let (toDelete, toKill, shutDown) = (caches, procs, sims)
         m.act("clean-all", confirm: .init(title: "Clean all?", message: "This will " + parts.joined(separator: ", ") + ".",
                                           button: "Clean all")) {
-            var msg = "Cleaned"
-            if !toDelete.isEmpty, let r = Actions.deleteDerived(toDelete, root: root) { msg = r }
-            if !toKill.isEmpty { _ = Actions.killAll(toKill) }
-            for udid in shutDown { _ = Actions.shutdownSim(udid) }
-            return msg
+            ActionLog.$batch.withValue("clean all") {
+                var msg = "Cleaned"
+                if !toDelete.isEmpty, let r = Actions.deleteDerived(toDelete, root: root) { msg = r }
+                if !toKill.isEmpty { _ = Actions.killAll(toKill, action: "kill stale process") }
+                for sim in shutDown { _ = Actions.shutdownSim(sim) }
+                return msg
+            }
         }
     }
 }
@@ -792,7 +792,7 @@ struct ProcessFold: View {
                     m.act("kill-old-mcp", confirm: .init(
                         title: "Kill \(older.count) older MCP servers?",
                         message: "Their sessions lose those tools until they restart. The newest one is kept.",
-                        button: "Kill")) { Actions.killAll(olderKids + older) }
+                        button: "Kill")) { Actions.killAll(olderKids + older, action: "kill old MCP servers") }
                 }
                 .buttonStyle(.link).font(.caption).padding(.top, 4)
             }
@@ -814,8 +814,7 @@ struct SimFold: View {
                 ItemRow(title: sim.name, subtitle: sim.usage.summary,
                         tags: sim.usage.projectGone ? ["project gone"] : [], help: sim.usage.detail) { hovering in
                     HoverAction(key: "sim-\(sim.udid)", icon: "power", help: "Shut down", visible: hovering) {
-                        let udid = sim.udid
-                        m.act("sim-\(udid)") { Actions.shutdownSim(udid) }
+                        m.act("sim-\(sim.udid)") { Actions.shutdownSim(sim) }
                     }
                 }
             }
@@ -838,7 +837,8 @@ struct MemoryUsersFold: View {
                     switch u.kind {
                     case .simulators where !(s.sims ?? []).isEmpty:
                         HoverAction(key: "mem-sims", icon: "power", help: "Shut down all simulators", visible: hovering) {
-                            m.act("mem-sims") { Actions.shutdownAllSims() }
+                            let sims = s.sims ?? []
+                            m.act("mem-sims") { Actions.shutdownAllSims(sims) }
                         }
                     case .app where u.bundlePath.map(MemoryActions.isQuittable) == true:
                         let bundle = u.bundlePath!
@@ -934,7 +934,7 @@ struct CustomRow: View {
     func perform(_ key: String, _ title: String, _ args: [String], _ confirm: String?) {
         let cfg = self.cfg
         m.act(key, confirm: confirm.map { .init(title: "\(row.title): \(title)?", message: $0, button: "Continue") }) {
-            Sections.perform(cfg, args)
+            Sections.perform(cfg, args, label: "\(row.title) · \(title)")
         }
     }
 }

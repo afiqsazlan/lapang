@@ -43,9 +43,12 @@ lapang status --json   # the same as JSON
 lapang clean           # what would be cleaned; add --yes to do it (--only caches,processes,simulators)
 lapang kill-old-mcp    # every MCP server but the newest; add --yes to do it
 lapang quit "Figma"    # ask an app from Memory users to quit; add --yes to do it
+lapang log             # what Lapang did: deleted, killed, shut down, and what it freed
 ```
 
 Actions only print what they would do until you add `--yes`. That makes it safe to hand to a coding agent: a Claude Code session (including one you drive from your phone with Remote Control) can run `lapang status`, tell you what's going on, and run the action once you agree.
+
+Every action that runs, from the panel or the command line, is written to `~/Library/Application Support/Lapang/actions.log`: one JSON line with the time, where it came from, exactly what was acted on (paths, pid, simulator udid, app bundle), the result, and the disk or memory it freed. Entries are kept for 30 days. Read it with `lapang log` (`--json`, `--limit N`) or under **Recent actions** in the gear menu. The log never leaves your Mac.
 
 ## Configuration
 

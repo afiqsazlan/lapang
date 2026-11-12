@@ -86,9 +86,15 @@ func renderPanel(to path: String) async {
         await Task.detached { SizeStore.shared.measure(paths) }.value
         await m.refresh()
     }
-    let root = Panel(scroll: false).environmentObject(m)
-        .environment(\.openFolds, renderOpenFolds(args))
-        .background(Color(nsColor: .windowBackgroundColor))
+    let open = renderOpenFolds(args)
+    let root = VStack(spacing: 0) {
+        Panel(scroll: false)
+        // a menu can't be drawn off-screen, so `--open "Recent actions"` lists its lines under the panel
+        if open?.contains("Recent actions") == true { RecentActionsPreview() }
+    }
+    .environmentObject(m)
+    .environment(\.openFolds, open)
+    .background(Color(nsColor: .windowBackgroundColor))
     let view = NSHostingView(rootView: root)
     if args.contains("--light") { view.appearance = NSAppearance(named: .aqua) }
     let size = view.fittingSize
@@ -179,6 +185,14 @@ struct Footer: View {
                 Button("Edit config…") { m.editConfig() }
                 Button("Re-measure folder sizes") { m.measure() }
                 Button("Show data folder") { m.reveal(Paths.support) }
+                Menu("Recent actions") {
+                    let recent = ActionLog.recent(10)
+                    if recent.isEmpty { Text("Nothing yet") }
+                    ForEach(Array(recent.enumerated()), id: \.offset) { Text($0.element.line) }
+                    Divider()
+                    Button("Show log in Finder") { m.reveal(ActionLog.file) }
+                        .disabled(!FileManager.default.fileExists(atPath: ActionLog.file))
+                }
                 Divider()
                 Button("Quit Lapang") { NSApp.terminate(nil) }
             } label: {
@@ -198,6 +212,23 @@ struct Footer: View {
             m.flash("Open at login: \(error.localizedDescription)")
         }
         atLogin = SMAppService.mainApp.status == .enabled
+    }
+}
+
+private struct RecentActionsPreview: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Recent actions").font(.caption).foregroundStyle(.secondary)
+            let recent = ActionLog.recent(10)
+            if recent.isEmpty { Text("Nothing yet") }
+            ForEach(Array(recent.enumerated()), id: \.offset) { Text($0.element.line) }
+            Divider()
+            Text("Show log in Finder")
+        }
+        .font(.callout).lineLimit(1)
+        .frame(width: 380, alignment: .leading)
+        .padding(12)
+        .overlay(alignment: .top) { Divider() }
     }
 }
 

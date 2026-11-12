@@ -84,10 +84,20 @@ enum Sections {
     }
 
     /// Runs one of a section's actions; returns the first line it printed, for the status line.
-    static func perform(_ cfg: SectionConfig, _ args: [String]) -> String? {
+    static func perform(_ cfg: SectionConfig, _ args: [String], label: String? = nil) -> String? {
         let r = Shell.run(Paths.expand(cfg.command), args, env: ["LAPANG_CONFIRMED": "1"])
-        guard let r else { return "Couldn't run \(cfg.title)" }
-        let text = r.status == 0 ? r.text : (r.errText.isEmpty ? r.text : r.errText)
-        return text.split(separator: "\n").first.map(String.init)
+        let text = r.map { $0.status == 0 ? $0.text : ($0.errText.isEmpty ? $0.text : $0.errText) } ?? ""
+        let first = text.split(separator: "\n").first.map(String.init)
+        let result: String? = switch r?.status {
+        case nil: "couldn't start \(Paths.abbreviate(Paths.expand(cfg.command)))"
+        case 0: nil
+        case let code?: "exit \(code)" + (first.map { ": " + $0 } ?? "")
+        }
+        ActionLog.record("section action", title: [cfg.title, label].compactMap { $0 }.joined(separator: ": "),
+                         target: ["section": cfg.title, "command": cfg.command, "label": label ?? "",
+                                  "args": args.joined(separator: " "), "output": first ?? ""],
+                         result: result)
+        guard r != nil else { return "Couldn't run \(cfg.title)" }
+        return first
     }
 }

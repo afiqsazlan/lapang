@@ -5,19 +5,21 @@ import Foundation
 // what they would do unless --yes is given, so an agent can show you first and then confirm.
 
 enum CLI {
-    static let commands: Set<String> = ["status", "clean", "kill-old-mcp", "quit", "help", "--help"]
+    static let commands: Set<String> = ["status", "clean", "kill-old-mcp", "quit", "log", "help", "--help"]
 
     /// Runs a command and exits when the binary was started with one; otherwise returns and the app starts.
     static func runIfRequested() {
         let args = Array(CommandLine.arguments.dropFirst())
         guard let cmd = args.first, commands.contains(cmd) else { return }
         let rest = Array(args.dropFirst())
+        ActionLog.source = "cli"
         let code: Int32
         switch cmd {
         case "status": code = status(json: rest.contains("--json"))
         case "clean": code = clean(rest)
         case "kill-old-mcp": code = killOldMCP(yes: rest.contains("--yes"))
         case "quit": code = quit(rest)
+        case "log": code = log(rest)
         default: code = help()
         }
         exit(code)
@@ -182,14 +184,16 @@ enum CLI {
             for c in chores { print("  - \(c.button.lowercased()): \(c.title) (\(c.subtitle))") }
             return 0
         }
-        for c in chores {
-            let result: String?
-            switch c.kind {
-            case .cache(let e): result = Actions.deleteDerived([e], root: s.derivedDataRoot)
-            case .process(let p): result = Actions.kill(p) ?? "Killed \(p.name) (pid \(p.pid))"
-            case .simulators(let list): result = list.compactMap { Actions.shutdownSim($0.udid) }.first ?? "Shut down \(list.map(\.name).joined(separator: ", "))"
+        ActionLog.$batch.withValue("clean") {
+            for c in chores {
+                let result: String?
+                switch c.kind {
+                case .cache(let e): result = Actions.deleteDerived([e], root: s.derivedDataRoot)
+                case .process(let p): result = Actions.kill(p) ?? "Killed \(p.name) (pid \(p.pid))"
+                case .simulators(let list): result = list.compactMap(Actions.shutdownSim).first ?? "Shut down \(list.map(\.name).joined(separator: ", "))"
+                }
+                print("  - \(c.title): \(result ?? "done")")
             }
-            print("  - \(c.title): \(result ?? "done")")
         }
         return 0
     }
@@ -211,7 +215,7 @@ enum CLI {
             print("Those sessions lose their MCP tools until they restart. Run again with --yes to do it.")
             return 0
         }
-        print(Actions.killAll(kids + older) ?? "Done")
+        print(Actions.killAll(kids + older, action: "kill old MCP servers") ?? "Done")
         return 0
     }
 
@@ -235,6 +239,36 @@ enum CLI {
         return 0
     }
 
+    // MARK: log
+
+    /// `lapang log [--json] [--limit N]`: what Lapang did, newest first.
+    static func log(_ args: [String]) -> Int32 {
+        var limit = 20
+        if let i = args.firstIndex(of: "--limit"), i + 1 < args.count {
+            guard let n = Int(args[i + 1]), n > 0 else { print("--limit takes a positive number"); return 2 }
+            limit = n
+        }
+        let entries = ActionLog.recent(limit)
+        if args.contains("--json") {
+            // one object per line, as stored, so it pipes into jq the same way the file does
+            for e in entries {
+                if let d = try? ActionLog.encoder.encode(e) { print(String(decoding: d, as: UTF8.self)) }
+            }
+            return 0
+        }
+        guard !entries.isEmpty else { print("No actions yet. The log is \(Paths.abbreviate(ActionLog.file))."); return 0 }
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        for e in entries {
+            var line = "\(f.string(from: e.time))  \(e.source.padding(toLength: 5, withPad: " ", startingAt: 0)) \(e.action): \(e.title) · \(e.outcome)"
+            if let b = e.batch { line += " [\(b)]" }
+            print(line)
+            let detail = e.target.sorted { $0.key < $1.key }.map { "\($0.key)=\(Paths.abbreviate($0.value))" }
+            print("    " + detail.joined(separator: "  "))
+        }
+        return 0
+    }
+
     static func help() -> Int32 {
         print("""
         lapang status [--json]       what the menu bar panel shows, as text or JSON
@@ -242,6 +276,8 @@ enum CLI {
                                        stale processes, orphaned/unused build caches, simulators
         lapang kill-old-mcp [--yes]  kill every MCP server but the newest (and its language server)
         lapang quit "<app>" [--yes]  ask an app from "Memory users" to quit
+        lapang log [--json] [--limit N]
+                                       what Lapang did (newest first, last 30 days)
 
         Actions only print what they would do unless --yes is given.
         """)
