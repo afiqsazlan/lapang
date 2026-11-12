@@ -52,22 +52,50 @@ struct LapangApp: App {
 
 struct MenuLabel: View {
     let snap: Snapshot?
+    @AppStorage("menuBar.glyph") private var glyph = true
 
     var body: some View {
         // Kept narrow: on a notched MacBook, menu bar items that don't fit are silently hidden.
         if let s = snap {
             let alert = s.diskLevel != .ok || s.pressureLevel == .crit || s.forecastWarning
-            if alert {
-                HStack(spacing: 2) {
+            HStack(spacing: alert ? 2 : 4) {
+                if alert {
                     Image(systemName: "exclamationmark.triangle.fill")
-                    Text("\(Int(s.freeGB))G")
+                } else if glyph {
+                    Image(nsImage: DiskGlyph.image(used: s.usedFraction))
                 }
-            } else {
                 Text("\(Int(s.freeGB))G")
             }
         } else {
             Image(systemName: "internaldrive")
         }
+    }
+}
+
+/// The app icon's level in one colour, filled by disk used; a template so the menu bar tints it.
+@MainActor
+enum DiskGlyph {
+    private static var cache: [Int: NSImage] = [:]
+
+    static func image(used: Double) -> NSImage {
+        let step = Int((min(max(used, 0), 1) * 20).rounded())
+        if let cached = cache[step] { return cached }
+        let level = CGFloat(step) / 20
+        let image = NSImage(size: NSSize(width: 13, height: 12), flipped: false) { r in
+            NSColor.black.set()
+            let outline = NSBezierPath(roundedRect: r.insetBy(dx: 0.75, dy: 0.75), xRadius: 3, yRadius: 3)
+            outline.lineWidth = 1.5
+            outline.stroke()
+            let inner = r.insetBy(dx: 2.75, dy: 2.75)
+            let fill = NSRect(x: inner.minX, y: inner.minY, width: inner.width,
+                              height: max(1.5, inner.height * level))
+            NSBezierPath(roundedRect: fill, xRadius: 1.2, yRadius: 1.2).fill()
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "Disk \(step * 5)% used"
+        cache[step] = image
+        return image
     }
 }
 
@@ -213,6 +241,7 @@ struct GearMenu: View {
     @EnvironmentObject var m: Monitor
     @ObservedObject private var updater = Updater.shared
     @State private var atLogin = SMAppService.mainApp.status == .enabled
+    @AppStorage("menuBar.glyph") private var menuGlyph = true
 
     var body: some View {
         Menu {
@@ -220,6 +249,7 @@ struct GearMenu: View {
                 .keyboardShortcut("0")
             Divider()
             Toggle("Open at login", isOn: Binding(get: { atLogin }, set: setLogin))
+            Toggle("Show disk level in menu bar", isOn: $menuGlyph)
             Toggle(mcpToggleTitle, isOn: Binding(get: { m.snap?.config.processes.mcpCleanup.enabled ?? false },
                                                  set: { m.setMCPCleanup($0) }))
             Divider()
