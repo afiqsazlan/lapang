@@ -49,6 +49,12 @@ git clone https://github.com/afiqsazlan/lapang.git && cd lapang
 
 `build.sh` compiles a release build, installs `Lapang.app` into `~/Applications` and launches it. To have it start at login, tick **Open at login** in the panel's gear menu. Use `./build.sh --no-install` to only build `./build/Lapang.app`.
 
+## Updates and privacy
+
+Release builds check for updates once a day with [Sparkle](https://sparkle-project.org). That check, a request for `https://www.afiqsazlan.com/lapang/appcast.xml`, is the only network call Lapang makes. It sends nothing about your Mac beyond what any web request carries: your IP address and a User-Agent with the Lapang version (`Lapang/0.1.0 Sparkle/2.10.1`). Lapang has no analytics and no telemetry, and Sparkle's system profiling is off. Updates are signed, and Lapang only installs ones signed with its own key. Turn the daily check off with **Check for updates daily** in the gear menu, or check by hand with **Check for Updates…**.
+
+A build from source (`./build.sh`) leaves the update check out entirely. Update it with `git pull && ./build.sh`. How releases are made is in [RELEASING.md](RELEASING.md).
+
 ## Command line, and agents
 
 The app binary is also a command. `build.sh` links it as `~/.local/bin/lapang` when that folder exists.
