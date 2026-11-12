@@ -1,12 +1,13 @@
 import AppKit
 import SwiftUI
+import UserNotifications
 
 /// The Lapang window: the whole picture at once, next to the menu bar panel for quick glances.
 /// It opens from Spotlight, Finder or the Dock, from the panel's window button or gear menu, and
 /// with ⌘0 while Lapang is active. On a notched MacBook a full menu bar can hide the menu bar
 /// item, so this is also the way back in.
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     static var monitor: Monitor?
     private static weak var shared: AppDelegate?
     private var window: NSWindow?
@@ -20,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static func openWindow() { shared?.showWindow() }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        UNUserNotificationCenter.current().delegate = self
         guard Self.monitor != nil else { return }  // an off-screen render
         installShortcuts()
         // Opened by hand: show the window. Started at login: stay in the menu bar.
@@ -75,6 +77,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return e
             }
         }
+    }
+
+    /// Clicking the weekly recap notification opens the share window on the weekly card.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                            withCompletionHandler done: @escaping () -> Void) {
+        let id = response.notification.request.identifier
+        Task { @MainActor in
+            if id == WeeklyRecap.identifier, let m = Self.monitor { ShareWindow.show(m, kind: .week) } else { self.showWindow() }
+            done()
+        }
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                            withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void) {
+        done([.banner, .sound])
     }
 
     private func launchedAtLogin() -> Bool {

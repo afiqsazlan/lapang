@@ -195,6 +195,9 @@ struct Footer: View {
             }
             if m.refreshing { ProgressView().controlSize(.mini) }
             Spacer()
+            Button { ShareWindow.show(m) } label: { Image(systemName: "square.and.arrow.up") }
+                .buttonStyle(.borderless).help("Share a snapshot of your Mac")
+                .disabled(m.snap == nil)
             Button { Task { await m.refresh() } } label: { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(.borderless).help("Refresh now")
             GearMenu()

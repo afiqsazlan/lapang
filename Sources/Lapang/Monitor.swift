@@ -47,6 +47,7 @@ final class Monitor: ObservableObject {
         if wanted != interval { schedule(wanted) }
         alertIfLow(s)
         if automate { stopIdleMCPServers(s) }
+        WeeklyRecap.maybeNotify(s)
         if SizeStore.shared.isDue { measure() }
         if !frozen { measureWorktrees(s) }
     }

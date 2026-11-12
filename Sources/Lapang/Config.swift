@@ -11,6 +11,19 @@ struct Config: Decodable {
     var ports = Ports()
     var worktrees = Worktrees()
     var sections: [SectionConfig] = []
+    var share = Share()
+
+    struct Share: Decodable {
+        /// A notification on Monday mornings with last week's recap, ready to share.
+        var weeklyRecap = false
+
+        init() {}
+        init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: CodingKeys.self)
+            weeklyRecap = try c.decodeIfPresent(Bool.self, forKey: .weeklyRecap) ?? weeklyRecap
+        }
+        enum CodingKeys: String, CodingKey { case weeklyRecap }
+    }
 
     struct Disk: Decodable {
         /// Below this much free space the menu bar turns to a warning and a notification fires.
@@ -186,8 +199,9 @@ struct Config: Decodable {
         ports = try c.decodeIfPresent(Ports.self, forKey: .ports) ?? ports
         worktrees = try c.decodeIfPresent(Worktrees.self, forKey: .worktrees) ?? worktrees
         sections = try c.decodeIfPresent([SectionConfig].self, forKey: .sections) ?? sections
+        share = try c.decodeIfPresent(Share.self, forKey: .share) ?? share
     }
-    enum CodingKeys: String, CodingKey { case refreshSeconds, disk, xcode, processes, caches, ports, worktrees, sections }
+    enum CodingKeys: String, CodingKey { case refreshSeconds, disk, xcode, processes, caches, ports, worktrees, sections, share }
 
     static let directory = Paths.home + "/.config/lapang"
     static let path = directory + "/config.json"
@@ -214,6 +228,7 @@ struct Config: Decodable {
       "caches": { "hide": [] },
       "ports": { "minPort": 1024, "maxPort": 49151, "hide": [], "names": {} },
       "worktrees": { "repos": [], "roots": [], "removeCommand": "git -C {repo} worktree remove {path}" },
+      "share": { "weeklyRecap": false },
       "sections": []
     }
 

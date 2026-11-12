@@ -248,6 +248,8 @@ private struct TopBar: View {
                 Text("Updated \(u.formatted(date: .omitted, time: .shortened))").foregroundStyle(.secondary)
             }
             if m.refreshing || m.measuring { ProgressView().controlSize(.small) }
+            Button { ShareWindow.show(m) } label: { Image(systemName: "square.and.arrow.up") }
+                .buttonStyle(.borderless).help("Share a snapshot of your Mac")
             Button { Task { await m.refresh() } } label: { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(.borderless).help("Refresh now (⌘R)")
             GearMenu()
