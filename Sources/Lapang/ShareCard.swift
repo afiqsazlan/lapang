@@ -478,7 +478,7 @@ struct WeekCard: View {
     var heat: some View {
         VStack(alignment: .leading, spacing: 0) {
             CardCaption(left: "Memory pressure by hour", strong: nil, right: "", m: m)
-            Heatmap(rows: d.heat, m: m)
+            Heatmap(rows: d.heat, m: m, grow: !m.wide)
         }
     }
 
@@ -496,7 +496,6 @@ struct WeekCard: View {
             VStack(alignment: .leading, spacing: m.gap) {
                 heat
                 Receipt(rows: Array(d.rows.prefix(m.ratio == .square ? 6 : 9)), m: m)
-                Spacer(minLength: 0)
             }
             .padding(.top, 40)
             .frame(maxHeight: .infinity)
@@ -507,6 +506,7 @@ struct WeekCard: View {
 struct Heatmap: View {
     let rows: [(day: Date, hours: [Double?])]
     let m: CardMetrics
+    var grow = false
     var body: some View {
         let label: CGFloat = m.wide ? 40 : 52
         let cell: CGFloat = m.wide ? 15 : (m.story ? 30 : (m.ratio == .square ? 16 : 22))
@@ -518,7 +518,7 @@ struct Heatmap: View {
                     HStack(spacing: m.wide ? 3 : 4) {
                         ForEach(0..<24, id: \.self) { h in
                             RoundedRectangle(cornerRadius: 3).fill(color(r.hours[h]))
-                                .frame(maxWidth: .infinity).frame(height: cell)
+                                .frame(maxWidth: .infinity).frame(minHeight: cell, maxHeight: grow ? cell * 2.4 : cell)
                         }
                     }
                 }
@@ -554,8 +554,14 @@ struct CleanCard: View {
     var empty: some View {
         VStack(alignment: .leading, spacing: 0) {
             Eyebrow(text: "lapang clean", m: m)
-            Headline(text: "Nothing cleaned yet today.", m: m)
-            Spacer()
+            Headline(text: "Nothing big cleaned yet.", m: m)
+            Text("Run Clean all in Lapang, then share what it freed.")
+                .font(.system(size: m.wide ? 22 : 26)).foregroundStyle(Zinc.z500).padding(.top, 14)
+            LevelGauge(fill: 0.35, line: 0.7, fillColor: Zinc.z200, lineWidth: m.wide ? 6 : 7)
+                .aspectRatio(0.62, contentMode: .fit)
+                .frame(maxWidth: m.wide ? 120 : 190, maxHeight: .infinity)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, m.wide ? 16 : 40)
         }
         .frame(maxHeight: .infinity)
     }

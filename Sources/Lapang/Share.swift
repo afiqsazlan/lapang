@@ -44,6 +44,9 @@ enum ShareWindow {
     private static var model: ShareModel?
 
     static func show(_ m: Monitor, kind: ShareKind? = nil) {
+        // Clicked from the menu bar panel: close the panel so the share window isn't hidden behind it.
+        // It is the key window and has no title bar; the Lapang window (opened from Finder) stays open.
+        if let panel = NSApp.keyWindow, !panel.styleMask.contains(.titled) { panel.close() }
         if window == nil {
             let model = ShareModel(monitor: m)
             let vc = NSHostingController(rootView: SharePanel(model: model))
@@ -77,7 +80,8 @@ final class ShareModel: ObservableObject {
 
     /// Right after a clean, open on the clean card.
     func pickDefault() {
-        if let last = ActionLog.recent(1).first, Date().timeIntervalSince(last.time) < 1800, last.result == "ok" {
+        if let last = ActionLog.recent(1).first, Date().timeIntervalSince(last.time) < 1800, last.result == "ok",
+           let s = monitor.snap, ShareContent.clean(s, src: .live) != nil {
             kind = .clean
         }
     }
@@ -194,6 +198,10 @@ extension CLI {
         }
         let demo = args.contains("--demo")
         let s = demo ? Demo.snapshot() : snapshot()
+        if kind == .clean, !demo, ShareContent.clean(s, src: .live) == nil {
+            print("Nothing big cleaned in the last day. Run `lapang clean --yes` (or Clean all in the panel) first.")
+            return 1
+        }
         let png = MainActor.assumeIsolated {
             ShareRenderer.png(kind, ratio: ratio, names: args.contains("--names"), snapshot: s, scale: scale,
                               src: demo ? .demo(s) : .live)

@@ -329,6 +329,8 @@ extension ShareContent {
         }
         let disk = group.compactMap(\.diskFreedBytes).reduce(0, +)
         let ram = group.compactMap(\.memoryFreedBytes).reduce(0, +)
+        // a stopped dev server or two isn't worth a card
+        guard disk + ram >= 100 << 20 || group.count >= 3 else { return nil }
         var parts: [String] = []
         if ram > 0 { parts.append(human(bytes: ram) + " of RAM") }
         if disk > 0 { parts.append(human(bytes: disk) + " of disk") }
