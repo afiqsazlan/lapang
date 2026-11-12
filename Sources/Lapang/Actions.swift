@@ -31,8 +31,8 @@ enum Actions {
     }
 
     /// Kills a watched process, re-checking it is still the same program first (pids get reused).
-    static func kill(_ p: DevProc, children: [DevProc] = []) -> String? {
-        let action = p.stale ? "kill stale process" : "kill process"
+    static func kill(_ p: DevProc, children: [DevProc] = [], action named: String? = nil) -> String? {
+        let action = named ?? (p.stale ? "kill stale process" : "kill process")
         let killed = (children + [p]).filter { terminate($0, action: action) }.count
         return killed > 0 ? nil : "Process \(p.pid) was already gone"
     }

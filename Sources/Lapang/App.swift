@@ -86,6 +86,11 @@ func renderPanel(to path: String) async {
         await Task.detached { SizeStore.shared.measure(paths) }.value
         await m.refresh()
     }
+    if !args.contains("--demo"), let s = m.snap, case let due = WorktreeSizes.shared.due(s.worktrees), !due.isEmpty {
+        let listed = Set(s.worktrees.flatMap(\.outputs))
+        await Task.detached { WorktreeSizes.shared.measure(due, keeping: listed) }.value
+        await m.refresh()
+    }
     let open = renderOpenFolds(args)
     let root = VStack(spacing: 0) {
         Panel(scroll: false)
@@ -150,6 +155,7 @@ struct Panel: View {
             if !s.memUsers.isEmpty { MemoryUsersFold(s: s) }
             GrowthFold(s: s)
             if !s.derived.isEmpty { XcodeFold(s: s) }
+            if !s.worktrees.isEmpty { WorktreesFold(s: s) }
             if !s.caches.isEmpty { CachesFold(s: s) }
             if !s.config.processes.names.isEmpty { ProcessFold(s: s) }
             PortsFold(s: s)
@@ -182,6 +188,8 @@ struct Footer: View {
                 .buttonStyle(.borderless).help("Refresh now")
             Menu {
                 Toggle("Open at login", isOn: Binding(get: { atLogin }, set: setLogin))
+                Toggle(mcpToggleTitle, isOn: Binding(get: { m.snap?.config.processes.mcpCleanup.enabled ?? false },
+                                                     set: { m.setMCPCleanup($0) }))
                 Divider()
                 Button("Edit config…") { m.editConfig() }
                 Button("Re-measure folder sizes") { m.measure() }
@@ -204,6 +212,11 @@ struct Footer: View {
             .fixedSize()
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
+    }
+
+    var mcpToggleTitle: String {
+        let h = m.snap?.config.processes.mcpCleanup.idleHours ?? 2
+        return "Stop idle MCP servers (\(hoursLabel(h))+)"
     }
 
     func setLogin(_ on: Bool) {

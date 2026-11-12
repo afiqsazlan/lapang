@@ -17,7 +17,7 @@ enum CLI {
         switch cmd {
         case "status": code = status(json: rest.contains("--json"))
         case "clean": code = clean(rest)
-        case "kill-old-mcp": code = killOldMCP(yes: rest.contains("--yes"))
+        case "kill-old-mcp": code = rest.contains("--idle") ? killIdleMCP(rest) : killOldMCP(yes: rest.contains("--yes"))
         case "quit": code = quit(rest)
         case "log": code = log(rest)
         case "ports": code = ports(json: rest.contains("--json"))
@@ -86,6 +86,12 @@ enum CLI {
         let caches = s.caches.reduce(Int64(0)) { $0 + ($1.sizeKB ?? 0) }
         out.append("Caches: Xcode \(human(kb: s.derivedTotalKB)) (\(s.derived.count) projects) · packages \(human(kb: caches))"
             + (s.sizesMeasuredAt.map { " · measured \(relative($0))" } ?? ""))
+        if !s.worktrees.isEmpty {
+            let total = s.worktrees.reduce(Int64(0)) { $0 + ($1.outputKB ?? 0) }
+            let merged = s.worktrees.filter(\.merged)
+            out.append("Worktrees: \(s.worktrees.count) · \(human(kb: total)) build output · \(merged.count) merged"
+                + (merged.isEmpty ? "" : " (\(human(kb: merged.reduce(0) { $0 + ($1.outputKB ?? 0) })))"))
+        }
         if let g = s.growth, !g.items.isEmpty {
             out.append("Grew since \(relative(g.since)): " + g.items.prefix(4).map {
                 "\($0.name) \($0.deltaKB > 0 ? "+" : "−")\(human(kb: abs($0.deltaKB)))"
@@ -157,10 +163,17 @@ enum CLI {
             "processes": s.procs.map { [
                 "pid": $0.pid, "name": $0.name, "kind": $0.kind, "bytes": $0.rssBytes,
                 "folder": $0.cwd, "stale": $0.stale, "uptime": $0.uptime,
+                "idleHours": opt($0.idleHours.map { ($0 * 10).rounded() / 10 }), "session": opt($0.session),
             ] },
             "ports": s.ports.map(portJSON),
             "xcodeCaches": s.derived.map { [
                 "project": $0.title, "status": "\($0.status)", "kb": opt($0.sizeKB), "idleDays": $0.idleDays,
+            ] },
+            "worktrees": s.worktrees.map { u -> [String: Any] in [
+                "path": u.path, "group": u.group, "branches": u.branches, "merged": u.merged, "noCommits": u.noCommits,
+                "lastActivity": ISO8601DateFormatter().string(from: u.lastActivity), "idleDays": u.idleDays,
+                "outputKB": opt(u.outputKB), "outputs": u.breakdown.map { ["name": $0.name, "kb": $0.kb] },
+                "agentOpen": u.agentOpen,
             ] },
             "packageCaches": s.caches.map { ["name": $0.name, "kb": opt($0.sizeKB), "clearable": $0.clearable] },
             "sections": s.sections.map { sec -> [String: Any] in [
@@ -172,10 +185,10 @@ enum CLI {
 
     // MARK: actions
 
-    /// `lapang clean [--only caches,processes,simulators] [--yes]`
+    /// `lapang clean [--only caches,processes,simulators,worktrees] [--yes]`
     static func clean(_ args: [String]) -> Int32 {
         let s = snapshot()
-        var only: Set<String> = ["caches", "processes", "simulators", "ports"]
+        var only: Set<String> = ["caches", "processes", "simulators", "ports", "worktrees"]
         if let i = args.firstIndex(of: "--only"), i + 1 < args.count {
             only = Set(args[i + 1].split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) })
         }
@@ -185,6 +198,7 @@ enum CLI {
             case .process: return only.contains("processes")
             case .simulators: return only.contains("simulators")
             case .port: return only.contains("ports")
+            case .worktrees: return only.contains("worktrees")
             }
         }
         guard !chores.isEmpty else { print("Nothing to clean."); return 0 }
@@ -200,6 +214,7 @@ enum CLI {
                 case .cache(let e): result = Actions.deleteDerived([e], root: s.derivedDataRoot)
                 case .process(let p): result = Actions.kill(p) ?? "Killed \(p.name) (pid \(p.pid))"
                 case .port(let l): result = PortActions.stop(l)
+                case .worktrees(let list): result = WorktreeActions.cleanOutput(list)
                 case .simulators(let list): result = list.compactMap(Actions.shutdownSim).first ?? "Shut down \(list.map(\.name).joined(separator: ", "))"
                 }
                 print("  - \(c.title): \(result ?? "done")")
@@ -226,6 +241,39 @@ enum CLI {
             return 0
         }
         print(Actions.killAll(kids + older, action: "kill old MCP servers") ?? "Done")
+        return 0
+    }
+
+    /// `lapang kill-old-mcp --idle [--hours N] [--keep N] [--yes]`: the automatic rule, run by hand.
+    /// Defaults to the rule's idleHours and keepNewest from config.json, even while it's turned off.
+    static func killIdleMCP(_ args: [String]) -> Int32 {
+        let s = snapshot()
+        let rule = s.config.processes.mcpCleanup
+        func value(_ flag: String) -> Double? {
+            args.firstIndex(of: flag).flatMap { $0 + 1 < args.count ? Double(args[$0 + 1]) : nil }
+        }
+        let hours = value("--hours") ?? rule.idleHours
+        let keep = Int(value("--keep") ?? Double(rule.keepNewest))
+        let mcp = s.procs.filter { $0.kind == "mcp" }
+        let list = MCPCleanup.candidates(s.procs, idleHours: hours, keepNewest: keep)
+        guard !list.isEmpty else {
+            print("No MCP server has been idle for \(hoursLabel(hours)) beyond the newest \(keep) (\(mcp.count) running).")
+            if let quietest = mcp.compactMap(\.idleHours).max() {
+                print("The longest idle has been quiet for \(durationText(hours: quietest)) as far as Lapang has seen.")
+            }
+            return 0
+        }
+        let freed = list.reduce(UInt64(0)) { $0 + $1.bytes }
+        guard args.contains("--yes") else {
+            print("Would stop \(list.count) idle MCP server(s) and their language servers, freeing about \(human(bytes: Int64(freed))):")
+            for c in list {
+                print("  - pid \(c.server.pid): \(c.server.session ?? "no session found"), idle \(durationText(hours: c.server.idleHours ?? 0)), \(human(bytes: Int64(c.bytes)))")
+            }
+            print("Those sessions lose their MCP tools until they restart. Run again with --yes to do it.")
+            return 0
+        }
+        let stopped = MCPCleanup.stop(list, auto: false)
+        print(MCPCleanup.summary(stopped))
         return 0
     }
 
@@ -347,9 +395,12 @@ enum CLI {
     static func help() -> Int32 {
         print("""
         lapang status [--json]       what the menu bar panel shows, as text or JSON
-        lapang clean [--only caches,processes,simulators,ports] [--yes]
-                                       stale processes, orphaned/unused build caches, simulators
+        lapang clean [--only caches,processes,simulators,ports,worktrees] [--yes]
+                                       stale processes, orphaned/unused build caches, simulators,
+                                       servers from deleted folders, build output of merged, idle worktrees
         lapang kill-old-mcp [--yes]  kill every MCP server but the newest (and its language server)
+        lapang kill-old-mcp --idle [--hours N] [--keep N] [--yes]
+                                       stop MCP servers with no tool calls for N hours (config's idleHours)
         lapang quit "<app>" [--yes]  ask an app from "Memory users" to quit
         lapang log [--json] [--limit N]
                                        what Lapang did (newest first, last 30 days)

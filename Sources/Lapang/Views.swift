@@ -380,6 +380,7 @@ struct Chore: Identifiable {
         case process(DevProc)
         case simulators([Sim])
         case port(Listener)
+        case worktrees([WorktreeUnit])
     }
     let id: String
     let icon: String
@@ -420,6 +421,20 @@ extension Snapshot {
             out.append(Chore(id: "port-\(l.pid)", icon: "network.slash", title: "Port \(l.portList): \(l.kind)",
                              subtitle: "\(l.folder ?? "Its folder") deleted · \(human(bytes: Int64(l.bytes)))",
                              button: "Stop", kind: .port(l), kb: 0, help: l.help))
+        }
+        // merged worktrees nobody has touched: one line for all of them, details in the fold
+        let idleMerged = worktrees.filter { $0.isChore(idleDays: config.worktrees.idleDays) }
+            .sorted { ($0.outputKB ?? 0) > ($1.outputKB ?? 0) }
+        if !idleMerged.isEmpty {
+            let kb = idleMerged.reduce(Int64(0)) { $0 + ($1.outputKB ?? 0) }
+            let clones = idleMerged.contains(where: \.hasClonableOutput)
+            let one = idleMerged.count == 1 ? idleMerged[0] : nil
+            out.append(Chore(id: "wt-clean", icon: "arrow.triangle.merge",
+                             title: one.map { "\($0.group)/\($0.name)" } ?? "\(idleMerged.count) merged worktrees",
+                             subtitle: "Build output, idle \(config.worktrees.idleDays)d+ · \(clones ? "up to " : "")\(human(kb: kb))",
+                             button: "Clean", kind: .worktrees(idleMerged), kb: kb,
+                             help: "Deletes only regenerable, git-ignored folders; the worktrees stay."
+                                + (clones ? " Copy-on-write clones free less than counted." : "")))
         }
         if let sims, !sims.isEmpty {
             // a simulator still running an app whose folder was deleted is its own chore
@@ -506,17 +521,20 @@ struct ChoresBlock: View {
             m.act(c.id) { all ? Actions.shutdownAllSims(list) : list.compactMap(Actions.shutdownSim).first }
         case .port(let l):
             m.act(c.id, confirm: PortActions.confirm(l)) { PortActions.stop(l) }
+        case .worktrees(let list):
+            m.act(c.id, confirm: WorktreesFold.cleanConfirm(list)) { WorktreeActions.cleanOutput(list) }
         }
     }
 
     func cleanAll(_ chores: [Chore]) {
-        var caches: [DerivedEntry] = [], procs: [DevProc] = [], sims: [Sim] = [], servers: [Listener] = []
+        var caches: [DerivedEntry] = [], procs: [DevProc] = [], sims: [Sim] = [], servers: [Listener] = [], trees: [WorktreeUnit] = []
         for c in chores {
             switch c.kind {
             case .cache(let e): caches.append(e)
             case .process(let p): procs.append(p)
             case .simulators(let list): sims += list
             case .port(let l): servers.append(l)
+            case .worktrees(let list): trees += list
             }
         }
         var parts: [String] = []
@@ -528,8 +546,9 @@ struct ChoresBlock: View {
             parts.append("stop \(servers.count) server\(servers.count == 1 ? "" : "s") whose folder was deleted (port\(servers.count == 1 ? "" : "s") \(servers.map(\.portList).joined(separator: ", ")))")
         }
         if !sims.isEmpty { parts.append("shut down the simulators") }
+        if !trees.isEmpty { parts.append("delete the build output of \(trees.count) merged worktree\(trees.count == 1 ? "" : "s")") }
         let root = s.derivedDataRoot
-        let (toDelete, toKill, shutDown, toStop) = (caches, procs, sims, servers)
+        let (toDelete, toKill, shutDown, toStop, toClean) = (caches, procs, sims, servers, trees)
         m.act("clean-all", confirm: .init(title: "Clean all?", message: "This will " + parts.joined(separator: ", ") + ".",
                                           button: "Clean all")) {
             ActionLog.$batch.withValue("clean all") {
@@ -538,6 +557,7 @@ struct ChoresBlock: View {
                 if !toKill.isEmpty { _ = Actions.killAll(toKill, action: "kill stale process") }
                 for sim in shutDown { _ = Actions.shutdownSim(sim) }
                 for l in toStop { _ = PortActions.stop(l) }
+                if !toClean.isEmpty { _ = WorktreeActions.cleanOutput(toClean) }
                 return msg
             }
         }
@@ -777,14 +797,17 @@ struct ProcessFold: View {
             ForEach(mcp) { p in
                 let kids = s.procs.filter { $0.ppid == p.pid }
                 let size = p.rssBytes + kids.reduce(0) { $0 + $1.rssBytes }
+                let newest = mcp.count > 1 && p.pid == mcp.max(by: { $0.started < $1.started })?.pid
+                let owner = p.stale ? "session gone" : (p.session ?? "")
+                let tags = (p.stale ? ["stale"] : []) + (p.idleTag.map { [$0] } ?? []) + (newest ? ["newest"] : [])
                 ItemRow(title: kids.isEmpty ? "\(p.name) MCP server" : "\(p.name) MCP + language server",
-                        subtitle: "up \(p.uptime) · \(human(bytes: Int64(size)))",
-                        tags: p.stale ? ["stale"] : [], help: "pid \(p.pid)") { hovering in
-                    HoverAction(key: "kill-\(p.pid)", icon: "xmark.circle", help: "Kill", visible: hovering) {
+                        subtitle: [owner, "up \(p.uptime)", human(bytes: Int64(size))].filter { !$0.isEmpty }.joined(separator: " · "),
+                        tags: tags, help: idleHelp(p)) { hovering in
+                    HoverAction(key: "kill-\(p.pid)", icon: "xmark.circle", help: "Stop", visible: hovering) {
                         m.act("kill-\(p.pid)", confirm: .init(
-                            title: "Kill this MCP server?",
-                            message: "The app or agent session that started it loses those tools until it restarts.",
-                            button: "Kill")) { Actions.kill(p, children: kids) }
+                            title: "Stop this MCP server?",
+                            message: "\(p.session ?? "The session that started it") loses those tools until it restarts.",
+                            button: "Stop")) { Actions.kill(p, children: kids) }
                     }
                 }
             }
@@ -797,20 +820,179 @@ struct ProcessFold: View {
                     }
                 }
             }
-            if mcp.count > 1 {
-                let older = Array(mcp.dropLast())
+            MCPCleanupNote(s: s, mcp: mcp)
+        }
+    }
+
+    func idleHelp(_ p: DevProc) -> String {
+        var lines = ["pid \(p.pid)"]
+        if let since = p.idleSince {
+            lines.append(p.idleTag == nil ? "Used in the last hour"
+                         : "No tool calls since \(since.formatted(date: .omitted, time: .shortened))")
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
+/// Under the MCP rows: what the automatic cleanup is doing, and a way to do it now.
+struct MCPCleanupNote: View {
+    @EnvironmentObject var m: Monitor
+    let s: Snapshot
+    let mcp: [DevProc]
+
+    var body: some View {
+        let rule = s.config.processes.mcpCleanup
+        let idle = MCPCleanup.candidates(s.procs, idleHours: rule.idleHours, keepNewest: rule.keepNewest)
+        let freed = idle.reduce(UInt64(0)) { $0 + $1.bytes }
+        VStack(alignment: .leading, spacing: 4) {
+            if !mcp.isEmpty {
+                Text(rule.enabled
+                     ? "Auto-stop is on: idle \(hoursLabel(rule.idleHours))+, newest \(rule.keepNewest) kept. A stopped server's session loses its tools until that session restarts."
+                     : "Turn on \"Stop idle MCP servers\" in the gear menu to stop servers idle \(hoursLabel(rule.idleHours))+ automatically.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            if !idle.isEmpty {
+                Button("Stop \(idle.count) idle server\(idle.count == 1 ? "" : "s") now · frees \(human(bytes: Int64(freed)))") {
+                    m.act("kill-idle-mcp", confirm: .init(
+                        title: "Stop \(idle.count) idle MCP server\(idle.count == 1 ? "" : "s")?",
+                        message: "Each has made no tool calls for \(hoursLabel(rule.idleHours)) or more. Their sessions lose those tools until they restart.",
+                        button: "Stop")) {
+                        let stopped = MCPCleanup.stop(idle, auto: false)
+                        return MCPCleanup.summary(stopped)
+                    }
+                }
+                .buttonStyle(.link).font(.caption)
+            } else if mcp.count > 1 {
+                let older = Array(mcp.sorted { $0.started < $1.started }.dropLast())
                 let olderKids = s.procs.filter { p in older.contains { $0.pid == p.ppid } }
                 let freed = (olderKids + older).reduce(UInt64(0)) { $0 + $1.rssBytes }
-                Button("Kill all MCP servers but the newest · frees \(human(bytes: Int64(freed)))") {
+                Button("Stop all MCP servers but the newest · frees \(human(bytes: Int64(freed)))") {
                     m.act("kill-old-mcp", confirm: .init(
-                        title: "Kill \(older.count) older MCP servers?",
+                        title: "Stop \(older.count) older MCP servers?",
                         message: "Their sessions lose those tools until they restart. The newest one is kept.",
-                        button: "Kill")) { Actions.killAll(olderKids + older, action: "kill old MCP servers") }
+                        button: "Stop")) { Actions.killAll(olderKids + older, action: "kill old MCP servers") }
                 }
-                .buttonStyle(.link).font(.caption).padding(.top, 4)
+                .buttonStyle(.link).font(.caption)
+            }
+        }
+        .padding(.top, 4)
+    }
+}
+
+struct WorktreesFold: View {
+    @EnvironmentObject var m: Monitor
+    let s: Snapshot
+    @State private var expanded: Set<String> = []
+
+    static let shown = 5
+
+    var body: some View {
+        let total = s.worktrees.reduce(Int64(0)) { $0 + ($1.outputKB ?? 0) }
+        let chore = s.worktrees.contains { $0.isChore(idleDays: s.config.worktrees.idleDays) }
+        Fold("Worktrees", icon: "arrow.triangle.branch", value: "\(s.worktrees.count) · \(human(kb: total)) output",
+             attention: chore) {
+            ForEach(groups, id: \.self) { g in
+                let units = s.worktrees.filter { $0.group == g }.sorted {
+                    // sizes within 50 MB count as equal; then the one untouched longest first
+                    let (x, y) = (($0.outputKB ?? -1) / 51200, ($1.outputKB ?? -1) / 51200)
+                    return x != y ? x > y : $0.lastActivity < $1.lastActivity
+                }
+                let open = expanded.contains(g)
+                HStack {
+                    Caption(text: "\(g) · \(units.count)")
+                    Spacer()
+                    if units.count > Self.shown {
+                        Button(open ? "Show fewer" : "Show all \(units.count)") {
+                            if open { expanded.remove(g) } else { expanded.insert(g) }
+                        }
+                        .buttonStyle(.link).font(.caption)
+                    }
+                }
+                .padding(.top, 6)
+                ForEach(open ? units : Array(units.prefix(Self.shown))) { WorktreeRow(u: $0) }
+            }
+            if s.worktrees.contains(where: \.hasClonableOutput) {
+                Text("node_modules and vendor are often copy-on-write clones, which share disk with the original, so cleaning frees less than shown. The status line reports what was really freed.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).padding(.top, 4)
+            }
+            if m.measuringWorktrees {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text("Measuring build output…")
+                }
+                .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
             }
         }
     }
+
+    var groups: [String] {
+        var seen: [String] = []
+        for u in s.worktrees where !seen.contains(u.group) { seen.append(u.group) }
+        return seen
+    }
+
+    static func cleanConfirm(_ units: [WorktreeUnit]) -> Monitor.Confirm {
+        var by: [String: Int64] = [:]
+        for u in units { for b in u.breakdown { by[b.name, default: 0] += b.kb } }
+        let kinds = by.sorted { $0.value > $1.value }.map { "\($0.key) \(human(kb: $0.value))" }.joined(separator: ", ")
+        let what = units.count == 1 ? units[0].name : "\(units.count) merged worktrees"
+        let names = units.count > 1 ? "\n\n" + units.prefix(12).map { "\($0.group)/\($0.name)" }.joined(separator: ", ")
+            + (units.count > 12 ? " and \(units.count - 12) more" : "") : ""
+        return .init(title: "Clean the build output of \(what)?",
+                     message: "Deletes \(kinds.isEmpty ? "their regenerable folders" : kinds). They're git-ignored and come back on the next build or install. "
+                        + (units.contains(where: \.hasClonableOutput) ? "Copy-on-write clones free less than du counts; Lapang reports what was really freed." : "")
+                        + names,
+                     button: "Clean")
+    }
+}
+
+struct WorktreeRow: View {
+    @EnvironmentObject var m: Monitor
+    let u: WorktreeUnit
+
+    var body: some View {
+        let parts = u.breakdown.prefix(2).map { "\($0.name) \(human(kb: $0.kb))" }
+        let size = u.outputs.isEmpty ? "no build output" : (parts.isEmpty ? "measuring…" : parts.joined(separator: " · "))
+        ItemRow(title: u.name, subtitle: "\(size) · \(u.activityText)", tags: u.tags, help: help) { hovering in
+            HStack(spacing: 2) {
+                if u.agentOpen {
+                    Image(systemName: "lock").foregroundStyle(.tertiary).frame(width: 22)
+                        .help("A Claude Code session is working here")
+                } else {
+                    if !u.outputs.isEmpty {
+                        HoverAction(key: "wt-clean-" + u.path, icon: "eraser", help: "Clean build output", visible: hovering) {
+                            m.act("wt-clean-" + u.path, confirm: WorktreesFold.cleanConfirm([u])) { WorktreeActions.cleanOutput([u]) }
+                        }
+                    }
+                    HoverAction(key: "wt-rm-" + u.path, icon: "trash", help: "Remove worktree", visible: hovering) {
+                        m.act("wt-rm-" + u.path, check: { removeConfirm(u) }) { WorktreeActions.remove(u) }
+                    }
+                }
+            }
+        }
+        .onTapGesture { m.reveal(u.path) }
+    }
+
+    var help: String {
+        var lines = [Paths.abbreviate(u.path)]
+        for w in u.members {
+            let name = u.members.count > 1 ? (w.path as NSString).lastPathComponent + ": " : ""
+            lines.append(name + (w.branch ?? "detached") + (w.merged && !w.noCommits ? " (merged)" : ""))
+        }
+        lines.append("Click to reveal in Finder")
+        return lines.joined(separator: "\n")
+    }
+}
+
+/// Built off the main thread: it runs git status in each member.
+private func removeConfirm(_ u: WorktreeUnit) -> Monitor.Confirm {
+    let warnings = WorktreeActions.removalWarnings(u)
+    let cmd = u.removeCommand.replacingOccurrences(of: "{repo}", with: u.repo.map(Paths.abbreviate) ?? "")
+        .replacingOccurrences(of: "{path}", with: Paths.abbreviate(u.path))
+        .replacingOccurrences(of: "{name}", with: u.name)
+    return .init(title: "Remove the worktree \(u.name)?",
+                 message: (warnings.isEmpty ? "" : warnings.joined(separator: " ") + "\n\n") + "Runs: \(cmd)",
+                 button: "Remove")
 }
 
 struct PortsFold: View {

@@ -10,14 +10,16 @@ A small macOS menu bar app that keeps an eye on what quietly fills up a develope
 
 The menu bar shows free disk space (`41G`) and adds a warning sign when space is low or filling fast. The label is kept narrow on purpose: on a notched MacBook, menu bar items that don't fit are silently hidden. If that happens anyway, open Lapang from Spotlight or Finder and the same panel appears in a normal window. The panel shows:
 
-- **Things to clean**: what's worth acting on right now, at the top: build caches whose project is gone or unused for days, stale processes, servers still running from a deleted folder, running simulators. Each has its own button, plus one "Clean all". Everything else folds into a single line until you open it.
+- **Things to clean**: what's worth acting on right now, at the top: build caches whose project is gone or unused for days, stale processes, servers still running from a deleted folder, running simulators, and the build output of merged worktrees nobody has touched for days. Each has its own button, plus one "Clean all". Everything else folds into a single line until you open it.
 - **Memory**: in the header next to disk: memory pressure, RAM used, swap, and a 24-hour pressure strip like Activity Monitor's ("under pressure 78% of the last 24 h"). "Memory users" lists the apps using the most memory by footprint, helpers included, with a Quit button for apps and Shut down for simulators.
 - **Disk**: free space, a usage bar, a sparkline of the last 24 hours, and a full chart (24 hours or 7 days) under "What grew".
 - **Trend**: how fast the disk is filling (a straight-line fit over the last 24 hours, restarting after any cleanup) and when it will reach your warning line, drawn as a dashed projection on the chart. A comparison with the size check from about a day ago shows what grew, e.g. `+4.2 GB Xcode build caches (mostly my-app +3.7 GB)`, with an "everything else" line for growth no measured folder explains. You get a notification when free space drops below your threshold, or when it's on course to within `forecastHours`.
 - **Simulators**: booted iOS simulators and what each is for: the app running inside it, the project folder of the `flutter run` or `xcodebuild` driving it, and the app that launched that (your terminal, Xcode, Claude Code). A simulator still running an app from a deleted folder shows up under things to clean.
 - **Dev processes**: watched processes (Dart and Flutter by default, including `flutter run`) with memory use and uptime. A process is marked stale when its parent died or its folder is gone.
 - **Ports**: your servers listening on a TCP port: the port, what it is (Vite, Next.js, `php artisan serve`, postgres, redis…), the folder it was started in (the last two folders, so worktrees are told apart), uptime, memory, and whether it's reachable only from this Mac or from the network. Each row has an Open link and a Stop button. Stop sends SIGTERM only to the process that owns the listening socket, after checking it's still the same program. A program that just has a connection to the port, like a tunnel in front of your dev server, is never stopped by mistake. App helpers, system services, other users' processes and ports 49152 and up are left out. Docker and OrbStack port forwards are shown but not stopped.
+- **Idle MCP servers**: every agent session starts its own MCP servers, and the Dart one brings a 2–3 GB language server along. Lapang tracks each MCP server's CPU time and tags the ones with no tool calls for hours (`idle 3h`), along with the Claude Code session that started them. Turn on **Stop idle MCP servers** in the gear menu and it stops servers idle past `idleHours` on its own, always keeping the newest, with one notification ("Stopped 2 idle MCP servers, freed 4.1 GB"). A stopped server's session loses those tools until that session restarts.
 - **Xcode build caches**: one row per DerivedData folder, mapped back to its project. Each shows size and when it was last built, and whether the project still exists. You can clean orphaned or unused caches in bulk; projects you mark as protected are never touched.
+- **Worktrees**: the git worktrees of the repos you list, each with the size of its regenerable build output (`build`, `.dart_tool`, `ios/Pods`, `node_modules`, `vendor`, `.next`, `dist`, `target`, only where git ignores them), when it was last touched, and whether its branch is merged into the default branch. **Clean build output** deletes only those folders; **Remove** runs your remove command. Worktrees with a Claude Code session working in them are locked. Copy-on-write clones (a `node_modules` made with `cp -c`) share disk with their original, so Lapang reports what `df` says was freed, not what `du` counted.
 - **Package caches**: npm, Yarn, pnpm, CocoaPods, Gradle, Homebrew, pub, iOS DeviceSupport and Xcode archives, with a Clear button where clearing is safe.
 - **Custom sections**: anything else, from your own scripts (see below).
 
@@ -41,10 +43,11 @@ The app binary is also a command. `build.sh` links it as `~/.local/bin/lapang` w
 ```bash
 lapang status          # the panel as text
 lapang status --json   # the same as JSON
-lapang clean           # what would be cleaned; add --yes to do it (--only caches,processes,simulators,ports)
+lapang clean           # what would be cleaned; add --yes to do it (--only caches,processes,simulators,ports,worktrees)
 lapang ports           # servers listening on a port, with folder and uptime (--json too)
 lapang stop-port 5173  # stop the server listening on 5173; add --yes to do it
 lapang kill-old-mcp    # every MCP server but the newest; add --yes to do it
+lapang kill-old-mcp --idle   # only those idle past idleHours, keeping keepNewest (--hours N, --keep N); add --yes
 lapang quit "Figma"    # ask an app from Memory users to quit; add --yes to do it
 lapang log             # what Lapang did: deleted, killed, shut down, and what it freed
 ```
@@ -65,9 +68,18 @@ Gear menu → **Edit config…** opens `~/.config/lapang/config.json`, creating 
     "idleDays": 3,
     "protect": ["~/code/my-app"]
   },
-  "processes": { "names": ["dart", "dartvm", "dartaotruntime"] },
+  "processes": {
+    "names": ["dart", "dartvm", "dartaotruntime"],
+    "mcpCleanup": { "enabled": false, "idleHours": 2, "keepNewest": 1 }
+  },
   "caches": { "hide": ["pnpm"] },
   "ports": { "minPort": 1024, "maxPort": 49151, "hide": [5000, "adb"], "names": { "3000": "tunnel origin" } },
+  "worktrees": {
+    "repos": ["~/code/api", { "path": "~/code/web", "removeCommand": "my-wt web rm {name}" }],
+    "roots": [{ "path": "~/code/stacks", "title": "stacks" }],
+    "removeCommand": "git -C {repo} worktree remove {path}",
+    "idleDays": 3
+  },
   "sections": [
     { "title": "Servers", "icon": "server.rack", "command": "~/.config/lapang/sections/servers.sh" }
   ]
@@ -81,6 +93,11 @@ Gear menu → **Edit config…** opens `~/.config/lapang/config.json`, creating 
 - `ports.minPort`, `ports.maxPort`: the range of ports to show. 49152 and up is where macOS hands out temporary ports (debuggers, editor helpers), so it's left out by default.
 - `ports.hide`: port numbers, or process names and kinds (`"adb"`, `"cloudflared"`, `"Vite"`), to leave out.
 - `ports.names`: your own labels for ports, shown next to the row.
+- `processes.mcpCleanup`: stop MCP servers (and their language servers) that have made no tool calls for `idleHours`, never touching the `keepNewest` most recently started. Off until you turn it on, here or in the gear menu. Idle means the server's own CPU time hasn't grown; Lapang only knows that from when it started watching.
+- `worktrees.repos`: repositories whose linked worktrees are listed (from `git worktree list`); the main checkout isn't. A repo is a path, or an object with `path`, `title`, `removeCommand` and `base` (what "merged" means; the remote's default branch when unset).
+- `worktrees.roots`: folders whose every subfolder is one unit holding worktrees of several repos, for setups that check out a few repos side by side. Same keys as a repo.
+- `worktrees.removeCommand`: how to remove one, run with `/bin/sh`. `{repo}`, `{path}` and `{name}` (the folder name) are filled in, shell-quoted. Point it at your own helper if you have one. Lapang asks first and shows uncommitted changes and unmerged branches in the dialog, but whether those are kept is up to the command.
+- `worktrees.idleDays`: merged worktrees untouched this long show up under things to clean (cleaning their build output, never removing them).
 - `caches.hide`: cache ids to leave out. The ids are `npm`, `yarn`, `pnpm`, `cocoapods`, `gradle`, `homebrew`, `pub`, `devicesupport` and `archives`.
 
 ## Custom sections
@@ -118,7 +135,7 @@ The section runs on every refresh, so keep it fast (well under a second).
 
 The app icon is drawn in code: `xcrun swift Support/make-icon.swift` regenerates `Support/AppIcon.icns` and `docs/icon.png`.
 
-`Lapang --render out.png` draws the full panel off-screen with live data and exits. It's useful for checking layout without clicking around the menu bar. Add `--demo` to use built-in sample data, `--light` for the light appearance, and `--open "Simulators,Memory"` to show sections opened. The README screenshot is made with:
+`Lapang --render out.png` draws the full panel off-screen with live data and exits. It's useful for checking layout without clicking around the menu bar. Add `--demo` to use built-in sample data, `--light` for the light appearance, and `--open "Simulators,Memory"` to show sections opened. To try actions on throwaway targets, set `LAPANG_HOME` to another folder: Lapang then reads its config from there, keeps its data there and expands `~` to it. The README screenshot is made with:
 
 ```bash
 ./build.sh --no-install && build/Lapang.app/Contents/MacOS/Lapang --render docs/screenshot.png --demo --light

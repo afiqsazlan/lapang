@@ -29,6 +29,7 @@ struct Snapshot {
     var growth: Growth?
     var sizesMeasuredAt: Date?
     var sections: [SectionState]
+    var worktrees: [WorktreeUnit] = []
 
     var freeGB: Double { Double(freeBytes) / 1_073_741_824 }
     var totalGB: Double { Double(totalBytes) / 1_073_741_824 }
@@ -88,6 +89,9 @@ struct DevProc: Identifiable {
     let started: Date
     let cwd: String
     let stale: Bool
+    /// MCP servers only: when it last used CPU (see MCPActivity) and the agent session that started it.
+    var idleSince: Date? = nil
+    var session: String? = nil
     var id: pid_t { pid }
 
     var uptime: String {
@@ -180,6 +184,10 @@ enum Engine {
             usedGB: Double(full.memUsed) / 1_073_741_824))
         full.memUsers = MemoryProbe.users()
         full.ports = Ports.discover(config.ports)
+        let wt = config.worktrees
+        if !wt.repos.isEmpty || !wt.roots.isEmpty {
+            full.worktrees = WorktreeStore.shared.units(wt, agentFolders: agentFolders())
+        }
         return full
     }
 
@@ -306,6 +314,7 @@ enum Engine {
         var pids = [pid_t](repeating: 0, count: Int(count) + 32)
         let n = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
         var out: [DevProc] = []
+        var cpu: [pid_t: UInt64] = [:]
         for pid in pids.prefix(Int(max(n, 0))) where pid > 0 {
             guard let path = execPath(pid) else { continue }
             let name = (path as NSString).lastPathComponent
@@ -317,19 +326,60 @@ enum Engine {
             let cwd = currentDir(pid) ?? ""
             let ppid = pid_t(bsd.pbi_ppid)
             let stale = ppid == 1 || (!cwd.isEmpty && !FileManager.default.fileExists(atPath: cwd))
-            out.append(DevProc(
+            var p = DevProc(
                 pid: pid, ppid: ppid, name: name, kind: kind(name: name, args: args(pid)),
                 rssBytes: MemoryProbe.footprint(pid) ?? task.pti_resident_size,
                 started: Date(timeIntervalSince1970: TimeInterval(bsd.pbi_start_tvsec)),
-                cwd: cwd, stale: stale))
+                cwd: cwd, stale: stale)
+            if p.kind == "mcp" {
+                cpu[pid] = MCPActivity.cpuNs(task)
+                p.session = agentSession(above: ppid)
+            }
+            out.append(p)
         }
+        let active = MCPActivity.update(out.filter { $0.kind == "mcp" }.map { ($0.pid, $0.started, cpu[$0.pid] ?? 0) })
+        for i in out.indices where out[i].kind == "mcp" { out[i].idleSince = active[out[i].pid] }
         return out.sorted { $0.pid < $1.pid }
+    }
+
+    /// The agent session (Claude Code, in a terminal or the desktop app) a process belongs to:
+    /// "Claude Code · <its folder>".
+    static func agentSession(above start: pid_t) -> String? {
+        var pid = start
+        for _ in 0 ..< 6 where pid > 1 {
+            if let path = execPath(pid), isClaudeCode(path) {
+                let dir = currentDir(pid).map { ($0 as NSString).lastPathComponent } ?? ""
+                return dir.isEmpty ? "Claude Code" : "Claude Code · \(dir)"
+            }
+            guard let parent = parentPID(pid) else { break }
+            pid = parent
+        }
+        return nil
+    }
+
+    static func isClaudeCode(_ path: String) -> Bool {
+        (path as NSString).lastPathComponent == "claude" || path.contains("/claude-code/")
+    }
+
+    /// The working folders of every running Claude Code session.
+    static func agentFolders() -> [String] {
+        let count = proc_listallpids(nil, 0)
+        guard count > 0 else { return [] }
+        var pids = [pid_t](repeating: 0, count: Int(count) + 64)
+        let n = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+        var out = Set<String>()
+        for pid in pids.prefix(Int(max(n, 0))) where pid > 0 {
+            guard let path = execPath(pid), (path as NSString).lastPathComponent == "claude",
+                  let cwd = currentDir(pid), !cwd.isEmpty else { continue }
+            out.insert(cwd)
+        }
+        return Array(out)
     }
 
     static func kind(name: String, args: [String]) -> String {
         let a = args.joined(separator: " ")
+        if a.contains(" mcp-server") { return "mcp" }
         if name == "dart" || name == "dartvm" || name == "dartaotruntime" {
-            if a.contains(" mcp-server") { return "mcp" }
             if a.contains("language-server") { return "lsp" }
             if a.contains("development-service") { return "devtools" }
             if a.contains("frontend_server") { return "compiler" }
@@ -482,10 +532,7 @@ final class SizeStore: @unchecked Sendable {
 
         var fresh: [String: Int64] = [:]
         for p in paths where FileManager.default.fileExists(atPath: p) {
-            if let r = Shell.run("/usr/bin/nice", ["-n", "15", "/usr/bin/du", "-sk", p]),
-               let kb = String(decoding: r.out, as: UTF8.self).split(separator: "\t").first.flatMap({ Int64($0) }) {
-                fresh[p] = kb
-            }
+            if let kb = Self.du(p) { fresh[p] = kb }
         }
 
         lock.lock()
@@ -496,6 +543,12 @@ final class SizeStore: @unchecked Sendable {
         lock.unlock()
         if let d = try? JSONEncoder().encode(stored) { try? d.write(to: URL(fileURLWithPath: file)) }
         GrowthLog.append(.init(t: stored.measuredAt, sizes: fresh))
+    }
+
+    /// Kilobytes used under a folder, from du at low priority.
+    static func du(_ path: String) -> Int64? {
+        guard let r = Shell.run("/usr/bin/nice", ["-n", "15", "/usr/bin/du", "-sk", path]) else { return nil }
+        return String(decoding: r.out, as: UTF8.self).split(separator: "\t").first.flatMap { Int64($0) }
     }
 
     /// Sample sizes for the demo render; kept in memory only, never saved.

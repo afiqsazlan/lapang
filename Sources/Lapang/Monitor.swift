@@ -9,15 +9,19 @@ final class Monitor: ObservableObject {
     @Published var running: Set<String> = []
     @Published var refreshing = false
     @Published var measuring = false
+    @Published var measuringWorktrees = false
     @Published var message: String?
     /// Set for the demo render: never replace the sample data with this Mac's.
     var frozen = false
     private var timer: Timer?
     private var interval: TimeInterval = 60
     private var lastNotified: Date?
+    /// Only the running app acts on its own (stopping idle MCP servers); renders never do.
+    private var automate = false
 
     init(startTimer: Bool = true) {
         guard startTimer else { return }
+        automate = true
         Task { await refresh() }
         schedule(60)
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
@@ -42,7 +46,50 @@ final class Monitor: ObservableObject {
         let wanted = TimeInterval(max(15, s.config.refreshSeconds))
         if wanted != interval { schedule(wanted) }
         alertIfLow(s)
+        if automate { stopIdleMCPServers(s) }
         if SizeStore.shared.isDue { measure() }
+        if !frozen { measureWorktrees(s) }
+    }
+
+    /// Measures worktree output folders that changed since they were last measured.
+    func measureWorktrees(_ s: Snapshot) {
+        guard !measuringWorktrees else { return }
+        let due = WorktreeSizes.shared.due(s.worktrees)
+        guard !due.isEmpty else { return }
+        measuringWorktrees = true
+        let listed = Set(s.worktrees.flatMap(\.outputs))
+        Task {
+            await Task.detached { WorktreeSizes.shared.measure(due, keeping: listed) }.value
+            measuringWorktrees = false
+            await refresh()
+        }
+    }
+
+    /// The opt-in rule: stop MCP servers idle past `idleHours`, keeping the newest `keepNewest`.
+    private func stopIdleMCPServers(_ s: Snapshot) {
+        let rule = s.config.processes.mcpCleanup
+        guard rule.enabled, !running.contains("auto-mcp") else { return }
+        let list = MCPCleanup.candidates(s.procs, idleHours: rule.idleHours, keepNewest: rule.keepNewest)
+        guard !list.isEmpty else { return }
+        running.insert("auto-mcp")
+        Task {
+            let stopped = await Task.detached { MCPCleanup.stop(list, auto: true) }.value
+            running.remove("auto-mcp")
+            guard !stopped.isEmpty else { return }
+            let text = MCPCleanup.summary(stopped)
+            flash(text)
+            let c = UNMutableNotificationContent()
+            c.title = text
+            c.body = "Idle for \(hoursLabel(rule.idleHours)) or more. Their sessions lose those tools until they restart."
+            try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "mcp-\(Date().timeIntervalSince1970)", content: c, trigger: nil))
+            await refresh()
+        }
+    }
+
+    func setMCPCleanup(_ on: Bool) {
+        if let e = Config.setMCPCleanup(on) { flash(e); return }
+        flash(on ? "Idle MCP servers will be stopped automatically" : "Automatic MCP cleanup is off")
+        Task { await refresh() }
     }
 
     func measure() {
@@ -82,6 +129,17 @@ final class Monitor: ObservableObject {
             running.remove(key)
             if let msg { flash(msg) }
             await refresh()
+        }
+    }
+
+    /// Like `act`, but works out what to ask first, off the main thread (e.g. running git status).
+    func act(_ key: String, check: @escaping @Sendable () -> Confirm?, _ work: @escaping @Sendable () -> String?) {
+        running.insert(key)
+        Task {
+            let c = await Task.detached { check() }.value
+            running.remove(key)
+            if let c, !Self.ask(c) { return }
+            act(key, work)
         }
     }
 

@@ -9,6 +9,7 @@ struct Config: Decodable {
     var processes = Processes()
     var caches = Caches()
     var ports = Ports()
+    var worktrees = Worktrees()
     var sections: [SectionConfig] = []
 
     struct Disk: Decodable {
@@ -51,13 +52,74 @@ struct Config: Decodable {
     struct Processes: Decodable {
         /// Executable names to watch. A watched process is stale when its parent died or its folder is gone.
         var names = ["dart", "dartvm", "dartaotruntime"]
+        var mcpCleanup = MCPCleanupRule()
 
         init() {}
         init(from d: Decoder) throws {
             let c = try d.container(keyedBy: CodingKeys.self)
             names = try c.decodeIfPresent([String].self, forKey: .names) ?? names
+            mcpCleanup = try c.decodeIfPresent(MCPCleanupRule.self, forKey: .mcpCleanup) ?? mcpCleanup
         }
-        enum CodingKeys: String, CodingKey { case names }
+        enum CodingKeys: String, CodingKey { case names, mcpCleanup }
+    }
+
+    /// Stop MCP servers that have been idle this long, keeping the newest few. Off until you turn it on.
+    struct MCPCleanupRule: Decodable {
+        var enabled = false
+        var idleHours = 2.0
+        var keepNewest = 1
+
+        init() {}
+        init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: CodingKeys.self)
+            enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? enabled
+            idleHours = try c.decodeIfPresent(Double.self, forKey: .idleHours) ?? idleHours
+            keepNewest = try c.decodeIfPresent(Int.self, forKey: .keepNewest) ?? keepNewest
+        }
+        enum CodingKeys: String, CodingKey { case enabled, idleHours, keepNewest }
+    }
+
+    struct Worktrees: Decodable {
+        /// Repositories whose linked worktrees are listed (the main checkout itself isn't).
+        var repos: [WorktreeSource] = []
+        /// Folders whose every subfolder is one unit holding worktrees of several repositories.
+        var roots: [WorktreeSource] = []
+        /// How to remove one. {repo}, {path} and {name} (the folder name) are filled in, shell-quoted.
+        var removeCommand = "git -C {repo} worktree remove {path}"
+        /// Merged worktrees untouched for this many days show up under things to clean.
+        var idleDays = 3
+
+        init() {}
+        init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: CodingKeys.self)
+            repos = try c.decodeIfPresent([WorktreeSource].self, forKey: .repos) ?? repos
+            roots = try c.decodeIfPresent([WorktreeSource].self, forKey: .roots) ?? roots
+            removeCommand = try c.decodeIfPresent(String.self, forKey: .removeCommand) ?? removeCommand
+            idleDays = try c.decodeIfPresent(Int.self, forKey: .idleDays) ?? idleDays
+        }
+        enum CodingKeys: String, CodingKey { case repos, roots, removeCommand, idleDays }
+    }
+
+    /// A repo or root: a path, or { "path", "title", "removeCommand", "base" }.
+    struct WorktreeSource: Decodable, Hashable {
+        var path: String
+        var title: String?
+        var removeCommand: String?
+        /// What "merged" is checked against; the remote's default branch (origin/HEAD) when unset.
+        var base: String?
+
+        init(from d: Decoder) throws {
+            if let p = try? d.singleValueContainer().decode(String.self) {
+                path = p
+                return
+            }
+            let c = try d.container(keyedBy: CodingKeys.self)
+            path = try c.decode(String.self, forKey: .path)
+            title = try c.decodeIfPresent(String.self, forKey: .title)
+            removeCommand = try c.decodeIfPresent(String.self, forKey: .removeCommand)
+            base = try c.decodeIfPresent(String.self, forKey: .base)
+        }
+        enum CodingKeys: String, CodingKey { case path, title, removeCommand, base }
     }
 
     struct Caches: Decodable {
@@ -122,9 +184,10 @@ struct Config: Decodable {
         processes = try c.decodeIfPresent(Processes.self, forKey: .processes) ?? processes
         caches = try c.decodeIfPresent(Caches.self, forKey: .caches) ?? caches
         ports = try c.decodeIfPresent(Ports.self, forKey: .ports) ?? ports
+        worktrees = try c.decodeIfPresent(Worktrees.self, forKey: .worktrees) ?? worktrees
         sections = try c.decodeIfPresent([SectionConfig].self, forKey: .sections) ?? sections
     }
-    enum CodingKeys: String, CodingKey { case refreshSeconds, disk, xcode, processes, caches, ports, sections }
+    enum CodingKeys: String, CodingKey { case refreshSeconds, disk, xcode, processes, caches, ports, worktrees, sections }
 
     static let directory = Paths.home + "/.config/lapang"
     static let path = directory + "/config.json"
@@ -144,9 +207,13 @@ struct Config: Decodable {
       "refreshSeconds": 60,
       "disk": { "warnGB": 20, "criticalGB": 10, "notify": true, "forecastHours": 24, "watch": [] },
       "xcode": { "idleDays": 3, "protect": [] },
-      "processes": { "names": ["dart", "dartvm", "dartaotruntime"] },
+      "processes": {
+        "names": ["dart", "dartvm", "dartaotruntime"],
+        "mcpCleanup": { "enabled": false, "idleHours": 2, "keepNewest": 1 }
+      },
       "caches": { "hide": [] },
       "ports": { "minPort": 1024, "maxPort": 49151, "hide": [], "names": {} },
+      "worktrees": { "repos": [], "roots": [], "removeCommand": "git -C {repo} worktree remove {path}" },
       "sections": []
     }
 
@@ -161,6 +228,53 @@ struct Config: Decodable {
         }
         return path
     }
+
+    /// Turns the MCP cleanup rule on or off by editing just that value, keeping the rest of the
+    /// file (its layout, other keys) as you wrote it. Returns why it couldn't, if it couldn't.
+    static func setMCPCleanup(_ on: Bool) -> String? {
+        let current = String(decoding: FileManager.default.contents(atPath: ensureFile()) ?? Data(), as: UTF8.self)
+        guard let text = settingMCPCleanup(on, in: current) else {
+            return "Couldn't update config.json safely; edit processes.mcpCleanup.enabled by hand"
+        }
+        do {
+            try text.write(toFile: path, atomically: true, encoding: .utf8)
+            return nil
+        } catch {
+            return "Couldn't save config.json: \(error.localizedDescription)"
+        }
+    }
+
+    /// The config text with processes.mcpCleanup.enabled set, or nil when that can't be done safely.
+    static func settingMCPCleanup(_ on: Bool, in original: String) -> String? {
+        var text = original
+        let value = on ? "true" : "false"
+        func firstMatch(_ pattern: String, in t: String) -> Range<String.Index>? {
+            t.range(of: pattern, options: .regularExpression)
+        }
+        if let block = firstMatch(#""mcpCleanup"\s*:\s*\{[^{}]*\}"#, in: text) {
+            var b = String(text[block])
+            if let e = firstMatch(#""enabled"\s*:\s*(true|false)"#, in: b) {
+                b.replaceSubrange(e, with: "\"enabled\": \(value)")
+            } else if let brace = b.firstIndex(of: "{") {
+                let empty = b.dropFirst().dropLast().allSatisfy(\.isWhitespace)
+                b.insert(contentsOf: " \"enabled\": \(value)" + (empty ? " " : ","), at: b.index(after: brace))
+            }
+            text.replaceSubrange(block, with: b)
+        } else if let p = firstMatch(#""processes"\s*:\s*\{"#, in: text) {
+            let rest = text[p.upperBound...].drop { $0 == " " || $0 == "\n" }
+            let comma = rest.first == "}" ? "" : ","
+            text.insert(contentsOf: " \"mcpCleanup\": { \"enabled\": \(value) }\(comma)", at: p.upperBound)
+        } else if let brace = text.firstIndex(of: "{") {
+            let rest = text[text.index(after: brace)...].drop { $0 == " " || $0 == "\n" }
+            let comma = rest.first == "}" ? "" : ","
+            text.insert(contentsOf: "\n  \"processes\": { \"mcpCleanup\": { \"enabled\": \(value) } }\(comma)",
+                        at: text.index(after: brace))
+        } else {
+            return nil
+        }
+        guard (try? JSONSerialization.jsonObject(with: Data(text.utf8))) != nil else { return nil }
+        return text
+    }
 }
 
 /// A custom section: an executable that prints JSON (see README, "Custom sections").
@@ -172,7 +286,9 @@ struct SectionConfig: Decodable, Identifiable, Hashable {
 }
 
 enum Paths {
-    static let home = NSHomeDirectory()
+    /// LAPANG_HOME points Lapang at another home folder (config, data, ~ in paths), for trying
+    /// actions on throwaway targets.
+    static let home = ProcessInfo.processInfo.environment["LAPANG_HOME"] ?? NSHomeDirectory()
 
     static func expand(_ p: String) -> String {
         if p == "~" { return home }
