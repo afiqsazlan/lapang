@@ -15,6 +15,10 @@ struct Config: Decodable {
         var warnGB = 20.0
         var criticalGB = 10.0
         var notify = true
+        /// Warn early when, at the current fill rate, free space reaches warnGB within this many hours.
+        var forecastHours = 24.0
+        /// Extra folders to measure for "what's growing" (package caches and Xcode are always measured).
+        var watch: [String] = []
 
         init() {}
         init(from d: Decoder) throws {
@@ -22,8 +26,10 @@ struct Config: Decodable {
             warnGB = try c.decodeIfPresent(Double.self, forKey: .warnGB) ?? warnGB
             criticalGB = try c.decodeIfPresent(Double.self, forKey: .criticalGB) ?? criticalGB
             notify = try c.decodeIfPresent(Bool.self, forKey: .notify) ?? notify
+            forecastHours = try c.decodeIfPresent(Double.self, forKey: .forecastHours) ?? forecastHours
+            watch = try c.decodeIfPresent([String].self, forKey: .watch) ?? watch
         }
-        enum CodingKeys: String, CodingKey { case warnGB, criticalGB, notify }
+        enum CodingKeys: String, CodingKey { case warnGB, criticalGB, notify, forecastHours, watch }
     }
 
     struct Xcode: Decodable {
@@ -93,7 +99,7 @@ struct Config: Decodable {
     static let starter = """
     {
       "refreshSeconds": 60,
-      "disk": { "warnGB": 20, "criticalGB": 10, "notify": true },
+      "disk": { "warnGB": 20, "criticalGB": 10, "notify": true, "forecastHours": 24, "watch": [] },
       "xcode": { "idleDays": 3, "protect": [] },
       "processes": { "names": ["dart", "dartaotruntime"] },
       "caches": { "hide": [] },

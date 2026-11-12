@@ -174,11 +174,12 @@ struct Caption: View {
 
 struct DiskBox: View {
     let s: Snapshot
+    @AppStorage("chartDays") private var days = 1
 
     var body: some View {
         Box("Disk", icon: "internaldrive") {
             switch s.diskLevel {
-            case .ok: Tag(text: "OK", color: .green)
+            case .ok: s.forecastWarning ? Tag(text: "Filling fast", color: .orange) : Tag(text: "OK", color: .green)
             case .warn: Tag(text: "Clean up soon", color: .orange)
             case .crit: Tag(text: "Almost full", color: .red)
             }
@@ -190,12 +191,110 @@ struct DiskBox: View {
                 Text(String(format: "free of %.0f GB", s.totalGB)).foregroundStyle(.secondary)
             }
             Bar(value: s.usedFraction, color: s.diskLevel.color)
-            if s.history.count >= 2 {
-                HistoryChart(points: s.history, warn: s.config.disk.warnGB)
+            TrendLine(s: s)
+            let shown = s.history.filter { Date().timeIntervalSince($0.t) <= Double(days) * 86400 }
+            if shown.count >= 2 {
+                HStack {
+                    Caption(text: "Free space")
+                    Spacer()
+                    Picker("", selection: $days) {
+                        Text("24h").tag(1)
+                        Text("7d").tag(7)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .frame(width: 90)
+                }
+                HistoryChart(points: shown, warn: s.config.disk.warnGB, days: days,
+                             forecast: days == 1 ? s.trend : nil, freeGB: s.freeGB)
             } else {
-                Text("A chart of the last 24 hours fills in here, one point every 5 minutes.")
+                Text("A chart of free space fills in here, one point every 5 minutes.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            GrowthList(s: s)
+        }
+    }
+}
+
+struct TrendLine: View {
+    let s: Snapshot
+
+    var body: some View {
+        let t = s.trend
+        let (icon, color, text): (String, Color, String) = {
+            switch t.state {
+            case .learning:
+                let mins = Int(t.span / 60)
+                return ("hourglass", .secondary,
+                        "Learning the fill rate (\(mins < 60 ? "\(mins) min" : "\(mins / 60) h") of data, needs 2 h)")
+            case .steady:
+                return ("equal.circle", .secondary, "Steady, no real change")
+            case .freeing:
+                return ("arrow.up.right.circle", .green, String(format: "Freeing up %.1f GB/day", t.ratePerDay))
+            case .filling:
+                var line = String(format: "Filling %.1f GB/day", -t.ratePerDay)
+                if let h = t.hoursToWarn, h > 0 {
+                    line += " · \(Int(s.config.disk.warnGB)) GB left in \(durationText(hours: h))"
+                } else if let h = t.hoursToFull {
+                    line += " · full in \(durationText(hours: h))"
+                }
+                return ("arrow.down.right.circle", s.forecastWarning || s.diskLevel != .ok ? .orange : .secondary, line)
+            }
+        }()
+        HStack(spacing: 6) {
+            Image(systemName: icon).foregroundStyle(color)
+            Text(text).foregroundStyle(color == .secondary ? Color.secondary : color)
+            Spacer()
+            if t.sinceCleanup && t.state != .learning {
+                Text("since last cleanup").foregroundStyle(.tertiary)
+            }
+        }
+        .font(.caption)
+        .help("A straight-line fit over the last 24 hours of free space, restarting after a cleanup.")
+    }
+}
+
+struct GrowthList: View {
+    let s: Snapshot
+
+    var body: some View {
+        if let g = s.growth {
+            VStack(alignment: .leading, spacing: 4) {
+                Caption(text: "Change since \(g.since.formatted(.relative(presentation: .named)))")
+                    .padding(.top, 4)
+                if g.items.isEmpty {
+                    Text("No measured folder changed by more than 50 MB.").font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(g.items) { i in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text((i.deltaKB > 0 ? "+" : "−") + human(kb: abs(i.deltaKB)))
+                            .monospacedDigit()
+                            .foregroundStyle(i.deltaKB > 0 ? Color.orange : Color.green)
+                            .frame(width: 64, alignment: .trailing)
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(i.name)
+                            if let d = i.detail {
+                                Text(d).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                            }
+                        }
+                    }
+                    .font(.caption)
+                }
+                if let u = g.untrackedKB, abs(u) >= 500 * 1024 {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text((u > 0 ? "+" : "−") + human(kb: abs(u)))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .frame(width: 64, alignment: .trailing)
+                        Text("Everything else (simulators, app data, downloads…)").foregroundStyle(.secondary)
+                    }
+                    .font(.caption)
+                }
+            }
+        } else if s.sizesMeasuredAt != nil {
+            Text("What's growing shows up after a second size check, about 30 minutes from the first.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 }
@@ -203,17 +302,32 @@ struct DiskBox: View {
 struct HistoryChart: View {
     let points: [HistoryPoint]
     let warn: Double
+    let days: Int
+    let forecast: Trend?
+    let freeGB: Double
 
     var body: some View {
+        // dashed projection up to 6 hours ahead while the disk is filling
+        let projection: [HistoryPoint] = {
+            guard let f = forecast, f.state == .filling, let last = points.last else { return [] }
+            let hours = min(6, f.hoursToFull ?? 6)
+            let end = last.t.addingTimeInterval(hours * 3600)
+            return [last, HistoryPoint(t: end, freeGB: max(0, last.freeGB + f.ratePerDay / 24 * hours))]
+        }()
         let top = max(points.map(\.freeGB).max() ?? 0, warn) * 1.25
         Chart {
             ForEach(points) { p in
                 AreaMark(x: .value("Time", p.t), y: .value("Free GB", p.freeGB))
                     .foregroundStyle(.linearGradient(colors: [.accentColor.opacity(0.25), .accentColor.opacity(0.02)],
                                                      startPoint: .top, endPoint: .bottom))
-                LineMark(x: .value("Time", p.t), y: .value("Free GB", p.freeGB))
+                LineMark(x: .value("Time", p.t), y: .value("Free GB", p.freeGB), series: .value("Series", "free"))
                     .foregroundStyle(Color.accentColor)
                     .lineStyle(StrokeStyle(lineWidth: 1.5))
+            }
+            ForEach(projection) { p in
+                LineMark(x: .value("Time", p.t), y: .value("Free GB", p.freeGB), series: .value("Series", "forecast"))
+                    .foregroundStyle(Color.orange.opacity(0.8))
+                    .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
             }
             RuleMark(y: .value("Warn", warn))
                 .foregroundStyle(.orange.opacity(0.7))
@@ -224,7 +338,13 @@ struct HistoryChart: View {
         }
         .chartYScale(domain: 0 ... top)
         .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 4)) { _ in AxisValueLabel(format: .dateTime.hour()) }
+            AxisMarks(values: .automatic(desiredCount: days == 1 ? 4 : 7)) { _ in
+                if days == 1 {
+                    AxisValueLabel(format: .dateTime.hour())
+                } else {
+                    AxisValueLabel(format: .dateTime.weekday(.abbreviated))
+                }
+            }
         }
         .chartYAxis {
             AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { v in
@@ -232,7 +352,7 @@ struct HistoryChart: View {
                 AxisValueLabel { if let g = v.as(Double.self) { Text("\(Int(g))G") } }
             }
         }
-        .frame(height: 80)
+        .frame(height: 90)
     }
 }
 

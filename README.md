@@ -2,9 +2,10 @@
 
 A small macOS menu bar app that keeps an eye on what quietly fills up a developer's Mac, and lets you clear it in a click.
 
-The menu bar shows free disk space (`41G`, plus `· 2 sim` while simulators run) and turns into a warning when space gets low. The panel shows:
+The menu bar shows free disk space (`41G`) and adds a warning sign when space is low or filling fast. The label is kept narrow on purpose: on a notched MacBook, menu bar items that don't fit are silently hidden. The panel shows:
 
-- **Disk**: free space, a usage bar, and a 24-hour chart. You get a notification when free space drops below your threshold.
+- **Disk**: free space, a usage bar, and a chart for 24 hours or 7 days.
+- **Trend**: how fast the disk is filling (a straight-line fit over the last 24 hours, restarting after any cleanup) and when it will reach your warning line, drawn as a dashed projection on the chart. A comparison with the size check from about a day ago shows what grew, e.g. `+4.2 GB Xcode build caches (mostly my-app +3.7 GB)`, with an "everything else" line for growth no measured folder explains. You get a notification when free space drops below your threshold, or when it's on course to within `forecastHours`.
 - **Memory**: memory pressure and swap. macOS can't grow swap on a nearly full disk, so a full disk shows up as memory trouble too.
 - **Simulators**: booted iOS simulators, each with a shut-down button.
 - **Dev processes**: watched processes (Dart and Flutter by default) with memory use and uptime. A process is marked stale when its parent died or its folder is gone.
@@ -32,7 +33,7 @@ Gear menu → **Edit config…** opens `~/.config/headroom/config.json`, creatin
 ```json
 {
   "refreshSeconds": 60,
-  "disk": { "warnGB": 20, "criticalGB": 10, "notify": true },
+  "disk": { "warnGB": 20, "criticalGB": 10, "notify": true, "forecastHours": 24, "watch": ["~/Downloads"] },
   "xcode": {
     "idleDays": 3,
     "protect": ["~/code/my-app"]
@@ -45,6 +46,8 @@ Gear menu → **Edit config…** opens `~/.config/headroom/config.json`, creatin
 }
 ```
 
+- `disk.forecastHours`: warn early when the fill rate says free space will reach `warnGB` within this many hours.
+- `disk.watch`: extra folders to include in "what's growing". Xcode and package caches are always measured.
 - `xcode.protect`: project folders whose build caches are never cleaned in bulk, usually your main checkouts. Rebuilding those from scratch is slow, while caches of throwaway worktrees aren't worth keeping.
 - `processes.names`: executable names to watch.
 - `caches.hide`: cache ids to leave out. The ids are `npm`, `yarn`, `pnpm`, `cocoapods`, `gradle`, `homebrew`, `pub`, `devicesupport` and `archives`.

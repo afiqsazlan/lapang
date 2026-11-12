@@ -46,7 +46,7 @@ final class Monitor: ObservableObject {
     func measure() {
         guard let s = snap, !measuring else { return }
         measuring = true
-        let paths = [s.derivedDataRoot] + s.derived.map(\.path) + s.caches.map(\.path)
+        let paths = s.measuredPaths
         Task {
             await Task.detached { SizeStore.shared.measure(paths) }.value
             measuring = false
@@ -56,12 +56,18 @@ final class Monitor: ObservableObject {
 
     private func alertIfLow(_ s: Snapshot) {
         guard s.config.disk.notify else { return }
-        guard s.diskLevel != .ok else { lastNotified = nil; return }
+        guard s.diskLevel != .ok || s.forecastWarning else { lastNotified = nil; return }
         if let t = lastNotified, Date().timeIntervalSince(t) < 6 * 3600 { return }
         lastNotified = Date()
         let c = UNMutableNotificationContent()
-        c.title = s.diskLevel == .crit ? "Disk almost full" : "Disk getting full"
-        c.body = String(format: "%.0f GB free. Open Headroom in the menu bar to clean up.", s.freeGB)
+        if s.diskLevel == .ok, let h = s.trend.hoursToWarn {
+            c.title = "Disk filling fast"
+            c.body = String(format: "%.0f GB free, filling %.1f GB/day: down to %.0f GB in %@.",
+                            s.freeGB, -s.trend.ratePerDay, s.config.disk.warnGB, durationText(hours: h))
+        } else {
+            c.title = s.diskLevel == .crit ? "Disk almost full" : "Disk getting full"
+            c.body = String(format: "%.0f GB free. Open Headroom in the menu bar to clean up.", s.freeGB)
+        }
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "disk", content: c, trigger: nil))
     }
 

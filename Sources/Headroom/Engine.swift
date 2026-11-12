@@ -18,7 +18,9 @@ struct Snapshot {
     var derivedDataRoot: String
     var derived: [DerivedEntry]
     var caches: [CacheInfo]
-    var history: [HistoryPoint]
+    var history: [HistoryPoint]  // last 7 days
+    var trend: Trend
+    var growth: Growth?
     var sizesMeasuredAt: Date?
     var sections: [SectionState]
 
@@ -26,6 +28,12 @@ struct Snapshot {
     var totalGB: Double { Double(totalBytes) / 1_073_741_824 }
     var usedFraction: Double { totalBytes > 0 ? 1 - Double(freeBytes) / Double(totalBytes) : 0 }
     var swapFraction: Double { swapTotal > 0 ? Double(swapUsed) / Double(swapTotal) : 0 }
+
+    /// The fill rate says free space reaches the warning line soon, though it isn't there yet.
+    var forecastWarning: Bool {
+        guard diskLevel == .ok, trend.state == .filling, let h = trend.hoursToWarn else { return false }
+        return h <= config.disk.forecastHours
+    }
 
     var diskLevel: Level {
         if freeGB < config.disk.criticalGB { return .crit }
@@ -124,6 +132,10 @@ enum Engine {
         let (free, total) = disk()
         let (swapUsed, swapTotal) = swap()
         let root = derivedDataRoot()
+        let freeGB = Double(free) / 1_073_741_824
+        let history = History.record(freeGB: freeGB)
+        let derived = derivedData(root: root, config: config.xcode)
+        let caches = caches(hidden: config.caches.hide)
         let snap = Snapshot(
             config: config, configError: configError,
             freeBytes: free, totalBytes: total,
@@ -132,9 +144,12 @@ enum Engine {
             sims: simulators(),
             procs: processes(named: config.processes.names),
             derivedDataRoot: root,
-            derived: derivedData(root: root, config: config.xcode),
-            caches: caches(hidden: config.caches.hide),
-            history: History.record(freeGB: Double(free) / 1_073_741_824),
+            derived: derived,
+            caches: caches,
+            history: history,
+            trend: Trend.compute(history, freeGB: freeGB, warnGB: config.disk.warnGB),
+            growth: GrowthLog.compute(derivedRoot: root, derived: derived, caches: caches,
+                                      watch: config.disk.watch.map(Paths.expand), history: history),
             sizesMeasuredAt: SizeStore.shared.measuredAt,
             sections: Sections.run(config.sections)
         )
@@ -376,6 +391,7 @@ final class SizeStore: @unchecked Sendable {
         let stored = Stored(measuredAt: measuredAt!, sizes: fresh)
         lock.unlock()
         if let d = try? JSONEncoder().encode(stored) { try? d.write(to: URL(fileURLWithPath: file)) }
+        GrowthLog.append(.init(t: stored.measuredAt, sizes: fresh))
     }
 
     func forget(_ path: String) {
@@ -384,7 +400,7 @@ final class SizeStore: @unchecked Sendable {
     }
 }
 
-// MARK: - Free-space history (a point every 5 minutes, 7 days kept, last 24h shown)
+// MARK: - Free-space history (a point every 5 minutes, 7 days kept)
 
 enum History {
     private static let file = Paths.support + "/history.json"
@@ -408,7 +424,7 @@ enum History {
             if let d = try? enc.encode(points) { try? d.write(to: URL(fileURLWithPath: file)) }
         }
         cache = points
-        return points.filter { now.timeIntervalSince($0.t) <= 86400 }
+        return points
     }
 }
 
@@ -443,5 +459,12 @@ enum Shell {
         g.wait()
         p.waitUntilExit()
         return Result(status: p.terminationStatus, out: outData, err: errData)
+    }
+}
+
+extension Snapshot {
+    /// Everything the background size check measures.
+    var measuredPaths: [String] {
+        [derivedDataRoot] + derived.map(\.path) + caches.map(\.path) + config.disk.watch.map(Paths.expand)
     }
 }

@@ -36,12 +36,16 @@ struct MenuLabel: View {
     let snap: Snapshot?
 
     var body: some View {
+        // Kept narrow: on a notched MacBook, menu bar items that don't fit are silently hidden.
         if let s = snap {
-            let alert = s.diskLevel != .ok || s.pressureLevel == .crit
-            let sims = s.sims?.count ?? 0
-            HStack(spacing: 3) {
-                Image(systemName: alert ? "exclamationmark.triangle.fill" : "internaldrive")
-                Text("\(Int(s.freeGB))G" + (sims > 0 ? " · \(sims) sim" : ""))
+            let alert = s.diskLevel != .ok || s.pressureLevel == .crit || s.forecastWarning
+            if alert {
+                HStack(spacing: 2) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                    Text("\(Int(s.freeGB))G")
+                }
+            } else {
+                Text("\(Int(s.freeGB))G")
             }
         } else {
             Image(systemName: "internaldrive")
@@ -54,7 +58,7 @@ func renderPanel(to path: String) async {
     let m = Monitor(startTimer: false)
     await m.refresh()
     if SizeStore.shared.isDue, let s = m.snap {
-        let paths = [s.derivedDataRoot] + s.derived.map(\.path) + s.caches.map(\.path)
+        let paths = s.measuredPaths
         await Task.detached { SizeStore.shared.measure(paths) }.value
         await m.refresh()
     }
