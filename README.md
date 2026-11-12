@@ -6,7 +6,7 @@ A small macOS menu bar app that keeps an eye on what quietly fills up a develope
 
 *Lapang* is Malay for spacious. *Rasa lapang* is the light feeling of having room to breathe again.
 
-<p align="center"><img src="docs/screenshot.png" width="380" alt="The Lapang panel: free disk space with fill rate and forecast, what grew since yesterday, memory, simulators, dev processes, Xcode build caches, package caches and a custom section"></p>
+<p align="center"><img src="docs/screenshot.png" width="380" alt="The Lapang panel: free disk space with fill rate and forecast, what grew since yesterday, memory, simulators, dev processes, listening ports, Xcode build caches, package caches and a custom section"></p>
 
 The menu bar shows free disk space (`41G`) and adds a warning sign when space is low or filling fast. The label is kept narrow on purpose: on a notched MacBook, menu bar items that don't fit are silently hidden. If that happens anyway, open Lapang from Spotlight or Finder and the same panel appears in a normal window. The panel shows:
 
