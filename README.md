@@ -92,6 +92,7 @@ lapang kill-old-mcp --idle   # only those idle past idleHours, keeping keepNewes
 lapang quit "Figma"    # ask an app from Memory users to quit; add --yes to do it
 lapang log             # what Lapang did: deleted, killed, shut down, and what it freed
 lapang share today     # a shareable PNG card of what this Mac went through; prints its path
+lapang report          # a diagnostics file to attach to a GitHub issue; prints its path
 ```
 
 Actions only print what they would do until you add `--yes`. That makes it safe to hand to a coding agent: a Claude Code session (including one you drive from your phone with Remote Control) can run `lapang status`, tell you what's going on, and run the action once you agree.
@@ -121,6 +122,26 @@ lapang share clean --demo                 # sample data, for trying layouts
 ```
 
 To support these cards, Lapang keeps a row per day in `daily.json` (busiest moment, `flutter run`s, project folders, builds), kept for 400 days. Claude Code sessions are counted from transcript file dates in `~/.claude/projects` when a card is made; their contents are never read. Set `"share": { "weeklyRecap": true }` in the config for a Monday-morning notification that opens the weekly card.
+
+## Reporting a problem
+
+`lapang report` writes a Markdown file of diagnostics to your Desktop, for attaching to a [GitHub issue](https://github.com/afiqsazlan/lapang/issues/new), and prints its path. It holds:
+
+- the Lapang and Sparkle versions, the macOS version and the chip
+- recent problems: a config that won't read, custom section errors, failed actions, Lapang crash reports
+- the files in the data folder and their sizes
+- your config
+- the last 20 entries of the action log
+- a `lapang status --json` snapshot
+
+Your user name, host names and the folder names under your home folder are replaced by short hashes (`~/‹3fa2c1›/‹9bc012›`), and custom sections' rows are left out. The hashes are salted for each report, so they can't be looked up, but the same folder gets the same hash throughout one file. Folders inside ~/Library that belong to other apps stay readable. Read the file before you attach it; nothing is sent anywhere.
+
+```bash
+lapang report --copy          # also puts a short Markdown summary on the clipboard, for the issue body
+lapang report --out ~/tmp/    # a folder or a file path instead of the Desktop
+lapang report --limit 50      # more action log entries
+lapang report --full          # no redaction
+```
 
 ## Configuration
 
