@@ -52,6 +52,9 @@ enum CLI {
         mem += String(format: " · %.1f of %.0f GB used · swap %@ of %@", Double(s.memUsed) / 1_073_741_824,
                       Double(s.memTotal) / 1_073_741_824, human(bytes: Int64(s.swapUsed)), human(bytes: Int64(s.swapTotal)))
         out.append(mem)
+        if let last = s.memSpikes.last, Date().timeIntervalSince(last.t) <= 86400 {
+            out.append("         Last spike \(last.t.formatted(date: .omitted, time: .shortened)) (\(PressureSpikes.label(last))): \(last.summary)")
+        }
 
         let chores = s.chores
         out.append("")
@@ -157,6 +160,12 @@ enum CLI {
                 "swapUsedGB": Double(s.swapUsed) / 1_073_741_824, "swapTotalGB": Double(s.swapTotal) / 1_073_741_824,
                 "pressuredShare24h": opt(MemoryHistory.pressuredShare(s.memHistory)),
                 "users": s.memUsers.map { ["name": $0.name, "bytes": $0.bytes, "processes": $0.processes] },
+                "spikes": s.memSpikes.suffix(20).reversed().map { sp -> [String: Any] in [
+                    "at": ISO8601DateFormatter().string(from: sp.t), "trigger": sp.trigger.rawValue,
+                    "swapGB": (sp.swapGB * 10).rounded() / 10, "swapGrowthGB": opt(sp.swapGrowthGB),
+                    "comparedWith": opt(sp.since.map { ISO8601DateFormatter().string(from: $0) }),
+                    "culprits": sp.culprits.map { ["name": $0.name, "mb": $0.mb, "growthMB": opt($0.growthMB)] },
+                ] },
             ],
             "chores": s.chores.map { ["title": $0.title, "detail": $0.subtitle, "action": $0.button, "diskKB": $0.kb] },
             "simulators": (s.sims ?? []).map { [

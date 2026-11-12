@@ -353,6 +353,7 @@ struct DiskCard: View {
 struct MemoryCard: View {
     let s: Snapshot
     var chartHeight: CGFloat = 54
+    @State private var focus = StripFocus()
 
     var body: some View {
         let line = MemoryLine(s: s)
@@ -371,15 +372,20 @@ struct MemoryCard: View {
                 Text(line.historyText)
             }
             .font(.caption).foregroundStyle(.secondary)
-            PressureStrip(points: s.memHistory, height: 14)
-            HStack {
-                Text("24 h ago")
-                Spacer()
-                Text("12 h ago")
-                Spacer()
-                Text("now")
+            PressureStrip(points: s.memHistory, spikes: s.memSpikes, height: 14, focus: $focus)
+            if let i = focus.shown {
+                Text(PressureStrip.describe(i, points: s.memHistory, spikes: s.memSpikes))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            } else {
+                HStack {
+                    Text("24 h ago")
+                    Spacer()
+                    Text("12 h ago")
+                    Spacer()
+                    Text("now")
+                }
+                .font(.caption2).foregroundStyle(.tertiary)
             }
-            .font(.caption2).foregroundStyle(.tertiary)
             HStack {
                 Text("Swap")
                 Spacer()

@@ -79,9 +79,20 @@ enum Demo {
             let t = now.addingTimeInterval(-Double(i) * 60)
             let hour = Calendar.current.component(.hour, from: t)
             let busy = (9 ..< 19).contains(hour)
-            let spike = busy && i % 97 < 6
+            let spike = (busy && i % 97 < 6) || (34 ... 39).contains(i)
             memHistory.append(MemoryPoint(t: t, pressure: spike ? 4 : (busy && i % 7 != 0 ? 2 : 1),
                                           swapGB: busy ? 4.5 : 1.2, usedGB: busy ? 31 : 22))
+        }
+        let culprits: [[PressureSpike.Culprit]] = [
+            [.init(name: "iOS Simulators", mb: 6_100, growthMB: 3_170), .init(name: "Claude Code sessions", mb: 2_600, growthMB: 2_460)],
+            [.init(name: "Dart and Flutter", mb: 2_900, growthMB: 2_100), .init(name: "Xcode", mb: 4_300, growthMB: 1_200)],
+            [.init(name: "Google Chrome", mb: 3_800, growthMB: 1_500)],
+        ]
+        let starts = memHistory.indices.dropFirst().filter { memHistory[$0].pressure == 4 && memHistory[$0 - 1].pressure < 4 }
+        let memSpikes = starts.enumerated().map { n, i in
+            PressureSpike(t: memHistory[i].t, trigger: .critical, pressure: 4, swapGB: memHistory[i].swapGB,
+                          swapGrowthGB: 1.1, since: memHistory[i].t.addingTimeInterval(-600),
+                          culprits: culprits[(starts.count - 1 - n) % culprits.count])
         }
         let memUsers = [
             MemoryUser(name: "iOS Simulators", bytes: 6_100 << 20, processes: 64, kind: .simulators, bundlePath: nil),
@@ -110,7 +121,7 @@ enum Demo {
             config: config, configError: nil,
             freeBytes: Int64(freeGB * 1_073_741_824), totalBytes: 460 * 1_073_741_824,
             pressure: 2, swapUsed: 4_600 << 20, swapTotal: 8_192 << 20,
-            memUsed: 31_400 << 20, memTotal: 36 << 30, memHistory: memHistory, memUsers: memUsers,
+            memUsed: 31_400 << 20, memTotal: 36 << 30, memHistory: memHistory, memUsers: memUsers, memSpikes: memSpikes,
             sims: [
                 Sim(udid: "A", name: "iPhone 16 Pro", usage: SimUsage(
                     apps: [("Shop", "com.example.shop")], project: home + "/code/worktrees/checkout-redesign/shop",

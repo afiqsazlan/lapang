@@ -241,6 +241,8 @@ struct Header: View {
 /// and swap is where the two meet (it lives on the disk).
 struct MemoryLine: View {
     let s: Snapshot
+    @State private var focus = StripFocus()
+    @Environment(\.pinLatestSpike) private var pinLatestSpike
 
     var body: some View {
         let (label, color) = (s.pressureText, s.pressureLevel.color)
@@ -255,20 +257,32 @@ struct MemoryLine: View {
                     .foregroundStyle(.secondary).monospacedDigit()
             }
             .font(.callout)
-            PressureStrip(points: s.memHistory)
-            HStack {
-                Text(historyText).foregroundStyle(.secondary)
-                Spacer()
-                Text("swap \(human(bytes: Int64(s.swapUsed))) of \(human(bytes: Int64(s.swapTotal)))")
-                    .foregroundStyle(s.swapFraction > 0.8 ? Color.orange : Color.secondary).monospacedDigit()
+            PressureStrip(points: s.memHistory, spikes: s.memSpikes, focus: $focus)
+            if let i = focus.shown {
+                Text(PressureStrip.describe(i, points: s.memHistory, spikes: s.memSpikes))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            } else {
+                HStack {
+                    Text(historyText).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("swap \(human(bytes: Int64(s.swapUsed))) of \(human(bytes: Int64(s.swapTotal)))")
+                        .foregroundStyle(s.swapFraction > 0.8 ? Color.orange : Color.secondary).monospacedDigit()
+                }
+                .font(.caption)
+                if let last = s.memSpikes.last, Date().timeIntervalSince(last.t) <= 2 * 3600 {
+                    Text("Last spike \(last.t.formatted(date: .omitted, time: .shortened)): \(last.summary)")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                }
             }
-            .font(.caption)
             if s.swapFraction > 0.8 && s.diskLevel != .ok {
                 Text("Swap lives on the disk and can't grow while it's this full. Freeing disk space helps memory too.")
                     .font(.caption).foregroundStyle(.orange)
             }
         }
         .help("Memory pressure is how hard macOS is working to find RAM. Swap is RAM spilled onto the disk.")
+        .onAppear {
+            if pinLatestSpike, let t = s.memSpikes.last?.t { focus.pinned = PressureStrip.slice(t, now: Date()) }
+        }
     }
 
     var historyText: String {
@@ -280,37 +294,118 @@ struct MemoryLine: View {
     }
 }
 
+/// Which pressure slice the pointer is over, or was clicked to stay shown.
+struct StripFocus {
+    var hover: Int?
+    var pinned: Int?
+    var shown: Int? { hover ?? pinned }
+}
+
+private struct PinLatestSpikeKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues {
+    /// Renders only: start with the latest spike's slice shown.
+    var pinLatestSpike: Bool {
+        get { self[PinLatestSpikeKey.self] }
+        set { self[PinLatestSpikeKey.self] = newValue }
+    }
+}
+
 /// The last 24 hours of memory pressure in 15-minute slices, like Activity Monitor's graph:
 /// grey when normal, orange under pressure, red when critical, faint where there's no data yet.
+/// A dot under a slice marks a recorded spike; hovering or clicking a slice shows what caused it.
 struct PressureStrip: View {
     let points: [MemoryPoint]
+    var spikes: [PressureSpike] = []
     var height: CGFloat = 8
+    var focus: Binding<StripFocus>?
+
+    static let slices = 96
+
+    static func slice(_ t: Date, now: Date) -> Int? {
+        let age = now.timeIntervalSince(t)
+        guard age >= 0, age < 86400 else { return nil }
+        return slices - 1 - Int(age / 900)
+    }
 
     var body: some View {
-        Canvas { ctx, size in
-            let now = Date()
-            let slices = 96
-            let w = size.width / CGFloat(slices)
-            var worst = [Int](repeating: 0, count: slices)
-            for p in points {
-                let age = now.timeIntervalSince(p.t)
-                guard age >= 0, age < 86400 else { continue }
-                let i = slices - 1 - Int(age / 900)
-                worst[i] = max(worst[i], p.pressure)
-            }
-            for i in 0 ..< slices {
-                let color: Color = switch worst[i] {
-                case 0: .primary.opacity(0.06)
-                case 1: .secondary.opacity(0.45)
-                case 2, 3: .orange
-                default: .red
+        let now = Date()
+        let marked = Set(spikes.compactMap { Self.slice($0.t, now: now) })
+        let shown = focus?.wrappedValue.shown
+        VStack(spacing: 2) {
+            Canvas { ctx, size in
+                let w = size.width / CGFloat(Self.slices)
+                var worst = [Int](repeating: 0, count: Self.slices)
+                for p in points {
+                    guard let i = Self.slice(p.t, now: now) else { continue }
+                    worst[i] = max(worst[i], p.pressure)
                 }
-                ctx.fill(Path(CGRect(x: CGFloat(i) * w, y: 0, width: w + 0.5, height: size.height)), with: .color(color))
+                for i in 0 ..< Self.slices {
+                    let color: Color = switch worst[i] {
+                    case 0: .primary.opacity(0.06)
+                    case 1: .secondary.opacity(0.45)
+                    case 2, 3: .orange
+                    default: .red
+                    }
+                    ctx.fill(Path(CGRect(x: CGFloat(i) * w, y: 0, width: w + 0.5, height: size.height)), with: .color(color))
+                }
+                if let shown {
+                    ctx.fill(Path(CGRect(x: CGFloat(shown) * w, y: 0, width: w + 0.5, height: size.height)),
+                             with: .color(.primary.opacity(0.55)))
+                }
+            }
+            .frame(height: height)
+            .clipShape(RoundedRectangle(cornerRadius: height / 2))
+            if !marked.isEmpty {
+                Canvas { ctx, size in
+                    let w = size.width / CGFloat(Self.slices)
+                    for i in marked {
+                        let d: CGFloat = 3
+                        ctx.fill(Path(ellipseIn: CGRect(x: (CGFloat(i) + 0.5) * w - d / 2, y: 0, width: d, height: d)),
+                                 with: .color(i == shown ? .primary : .secondary))
+                    }
+                }
+                .frame(height: 3)
             }
         }
-        .frame(height: height)
-        .clipShape(RoundedRectangle(cornerRadius: height / 2))
-        .help("Memory pressure over the last 24 hours, oldest on the left")
+        .overlay {
+            if let focus {
+                GeometryReader { g in
+                    let index = { (x: CGFloat) in min(Self.slices - 1, max(0, Int(x / g.size.width * CGFloat(Self.slices)))) }
+                    Color.clear.contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case let .active(at): focus.wrappedValue.hover = index(at.x)
+                            case .ended: focus.wrappedValue.hover = nil
+                            }
+                        }
+                        .onTapGesture(coordinateSpace: .local) { at in
+                            let i = index(at.x)
+                            focus.wrappedValue.pinned = focus.wrappedValue.pinned == i ? nil : i
+                        }
+                }
+            }
+        }
+        .help(focus == nil ? "Memory pressure over the last 24 hours, oldest on the left" : "")
+    }
+
+    /// "2:15 – 2:30 PM · Critical · iOS Simulators +3.1 GB, Claude Code sessions +2.4 GB"
+    static func describe(_ i: Int, points: [MemoryPoint], spikes: [PressureSpike], now: Date = Date()) -> String {
+        let start = now.addingTimeInterval(-Double(slices - i) * 900)
+        let end = start.addingTimeInterval(900)
+        let range = start.formatted(date: .omitted, time: .shortened) + " – " + end.formatted(date: .omitted, time: .shortened)
+        let worst = points.filter { slice($0.t, now: now) == i }.map(\.pressure).max() ?? 0
+        let level = switch worst {
+        case 0: "No data"
+        case 1: "Normal"
+        case 2, 3: "Under pressure"
+        default: "Critical"
+        }
+        let rank: [PressureSpike.Trigger: Int] = [.critical: 3, .warn: 2, .swap: 1]
+        guard let spike = spikes.filter({ slice($0.t, now: now) == i }).max(by: { rank[$0.trigger]! < rank[$1.trigger]! }) else {
+            return range + " · " + level
+        }
+        let swap = spike.trigger == .swap ? String(format: " · swap +%.1f GB", spike.swapGrowthGB ?? 0) : ""
+        return range + " · " + level + swap + " · " + spike.summary
     }
 }
 

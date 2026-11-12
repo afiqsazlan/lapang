@@ -99,7 +99,8 @@ enum MemoryHistory {
     nonisolated(unsafe) private static var cache: [MemoryPoint]?
     private static let lock = NSLock()
 
-    static func record(_ p: MemoryPoint) -> [MemoryPoint] {
+    /// The last 24 hours, the sample before this one, and whether this one was stored.
+    static func record(_ p: MemoryPoint) -> (day: [MemoryPoint], previous: MemoryPoint?, stored: Bool) {
         lock.lock(); defer { lock.unlock() }
         var points = cache ?? {
             guard let d = FileManager.default.contents(atPath: file) else { return [] }
@@ -107,7 +108,9 @@ enum MemoryHistory {
             dec.dateDecodingStrategy = .secondsSince1970
             return (try? dec.decode([MemoryPoint].self, from: d)) ?? []
         }()
-        if points.last.map({ p.t.timeIntervalSince($0.t) >= 55 }) ?? true {
+        let previous = points.last
+        let stored = previous.map { p.t.timeIntervalSince($0.t) >= 55 } ?? true
+        if stored {
             points.append(p)
             points.removeAll { p.t.timeIntervalSince($0.t) > 7 * 86400 }
             let enc = JSONEncoder()
@@ -115,7 +118,7 @@ enum MemoryHistory {
             if let d = try? enc.encode(points) { try? d.write(to: URL(fileURLWithPath: file)) }
         }
         cache = points
-        return points.filter { p.t.timeIntervalSince($0.t) <= 86400 }
+        return (points.filter { p.t.timeIntervalSince($0.t) <= 86400 }, previous, stored)
     }
 
     /// Every stored sample, up to 7 days.
