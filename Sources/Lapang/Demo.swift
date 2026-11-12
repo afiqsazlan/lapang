@@ -138,4 +138,29 @@ enum Demo {
         snap.ports = ports
         return snap
     }
+
+    /// A day and a half of the action log, newest first.
+    static func actions() -> [ActionEntry] {
+        let now = Date()
+        let home = "/Users/me"
+        let dd = home + "/Library/Developer/Xcode/DerivedData/"
+        func e(_ minutesAgo: Double, _ action: String, _ title: String, _ target: [String: String], source: String = "panel",
+               result: String = "ok", disk: Int64? = nil, mem: Int64? = nil, batch: String? = nil) -> ActionEntry {
+            ActionEntry(time: now.addingTimeInterval(-minutesAgo * 60), source: source, action: action, title: title,
+                        target: target, result: result, diskFreedBytes: disk, memoryFreedBytes: mem, batch: batch, version: "demo")
+        }
+        let gb: (Double) -> Int64 = { Int64($0 * 1_073_741_824) }
+        return [
+            e(28, "delete build cache", "old-onboarding/shop", ["path": dd + "Runner-dvp"], disk: gb(1.6), batch: "clean all"),
+            e(28, "delete build cache", "search-filters/shop", ["path": dd + "Runner-cmt"], disk: gb(1.3), batch: "clean all"),
+            e(28, "kill stale process", "DevTools service", ["pid": "3377", "cwd": home + "/code/worktrees/old-onboarding/shop"],
+              mem: 95 << 20, batch: "clean all"),
+            e(28, "shut down simulator", "iPhone 16 Pro", ["udid": "A"], mem: 315 << 20, batch: "clean all"),
+            e(190, "quit app", "Slack", ["bundle": "/Applications/Slack.app"], mem: gb(1.2)),
+            e(380, "clear cache", "npm", ["path": home + "/.npm"], source: "cli", disk: gb(2.1)),
+            e(520, "section action", "Local servers: api · Restart", ["section": "Local servers"]),
+            e(1390, "kill old MCP servers", "3 MCP servers", ["pids": "4410 4502 4630"], source: "cli", mem: gb(1.1)),
+            e(1580, "delete build cache", "shop", ["path": dd + "Runner-akq"], result: "permission denied"),
+        ]
+    }
 }

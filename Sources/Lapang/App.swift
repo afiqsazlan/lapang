@@ -76,6 +76,7 @@ func renderPanel(to path: String) async {
     let args = CommandLine.arguments
     if args.contains("--demo") {
         m.snap = Demo.snapshot()
+        ActionLog.demo = Demo.actions()
         m.updated = Date()
         m.frozen = true
     } else {
@@ -91,6 +92,13 @@ func renderPanel(to path: String) async {
         await Task.detached { WorktreeSizes.shared.measure(due, keeping: listed) }.value
         await m.refresh()
     }
+    if let i = args.firstIndex(of: "--window") {
+        // `--window [page]` draws the window at its default size instead of the panel
+        let page = i + 1 < args.count && !args[i + 1].hasPrefix("--") ? args[i + 1] : "overview"
+        let root = MainWindow(page: page).environmentObject(m)
+            .frame(width: MainWindow.defaultSize.width, height: MainWindow.defaultSize.height)
+        await snapshotView(NSHostingView(rootView: root), to: path, light: args.contains("--light"))
+    }
     let open = renderOpenFolds(args)
     let root = VStack(spacing: 0) {
         Panel(scroll: false)
@@ -100,8 +108,12 @@ func renderPanel(to path: String) async {
     .environmentObject(m)
     .environment(\.openFolds, open)
     .background(Color(nsColor: .windowBackgroundColor))
-    let view = NSHostingView(rootView: root)
-    if args.contains("--light") { view.appearance = NSAppearance(named: .aqua) }
+    await snapshotView(NSHostingView(rootView: root), to: path, light: args.contains("--light"))
+}
+
+@MainActor
+private func snapshotView(_ view: NSView, to path: String, light: Bool) async {
+    if light { view.appearance = NSAppearance(named: .aqua) }
     let size = view.fittingSize
     let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: .borderless,
                           backing: .buffered, defer: false)
@@ -172,7 +184,6 @@ private struct HeightKey: PreferenceKey {
 
 struct Footer: View {
     @EnvironmentObject var m: Monitor
-    @State private var atLogin = SMAppService.mainApp.status == .enabled
 
     var body: some View {
         HStack(spacing: 10) {
@@ -186,32 +197,45 @@ struct Footer: View {
             Spacer()
             Button { Task { await m.refresh() } } label: { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(.borderless).help("Refresh now")
-            Menu {
-                Toggle("Open at login", isOn: Binding(get: { atLogin }, set: setLogin))
-                Toggle(mcpToggleTitle, isOn: Binding(get: { m.snap?.config.processes.mcpCleanup.enabled ?? false },
-                                                     set: { m.setMCPCleanup($0) }))
-                Divider()
-                Button("Edit config…") { m.editConfig() }
-                Button("Re-measure folder sizes") { m.measure() }
-                Button("Show data folder") { m.reveal(Paths.support) }
-                Menu("Recent actions") {
-                    let recent = ActionLog.recent(10)
-                    if recent.isEmpty { Text("Nothing yet") }
-                    ForEach(Array(recent.enumerated()), id: \.offset) { Text($0.element.line) }
-                    Divider()
-                    Button("Show log in Finder") { m.reveal(ActionLog.file) }
-                        .disabled(!FileManager.default.fileExists(atPath: ActionLog.file))
-                }
-                Divider()
-                Button("Quit Lapang") { NSApp.terminate(nil) }
-            } label: {
-                Image(systemName: "gearshape")
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
+            GearMenu()
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
+    }
+}
+
+/// The gear menu, at the foot of the panel and in the window's toolbar.
+struct GearMenu: View {
+    @EnvironmentObject var m: Monitor
+    @State private var atLogin = SMAppService.mainApp.status == .enabled
+
+    var body: some View {
+        Menu {
+            Button("Open Lapang window") { AppDelegate.openWindow() }
+                .keyboardShortcut("0")
+            Divider()
+            Toggle("Open at login", isOn: Binding(get: { atLogin }, set: setLogin))
+            Toggle(mcpToggleTitle, isOn: Binding(get: { m.snap?.config.processes.mcpCleanup.enabled ?? false },
+                                                 set: { m.setMCPCleanup($0) }))
+            Divider()
+            Button("Edit config…") { m.editConfig() }
+            Button("Re-measure folder sizes") { m.measure() }
+            Button("Show data folder") { m.reveal(Paths.support) }
+            Menu("Recent actions") {
+                let recent = ActionLog.recent(10)
+                if recent.isEmpty { Text("Nothing yet") }
+                ForEach(Array(recent.enumerated()), id: \.offset) { Text($0.element.line) }
+                Divider()
+                Button("Show log in Finder") { m.reveal(ActionLog.file) }
+                    .disabled(!FileManager.default.fileExists(atPath: ActionLog.file))
+            }
+            Divider()
+            Button("Quit Lapang") { NSApp.terminate(nil) }
+        } label: {
+            Image(systemName: "gearshape")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
     }
 
     var mcpToggleTitle: String {

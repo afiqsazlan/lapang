@@ -8,7 +8,7 @@ A small macOS menu bar app that keeps an eye on what quietly fills up a develope
 
 <p align="center"><img src="docs/screenshot.png" width="380" alt="The Lapang panel: free disk space with fill rate and forecast, what grew since yesterday, memory, simulators, dev processes, listening ports, Xcode build caches, package caches and a custom section"></p>
 
-The menu bar shows free disk space (`41G`) and adds a warning sign when space is low or filling fast. The label is kept narrow on purpose: on a notched MacBook, menu bar items that don't fit are silently hidden. If that happens anyway, open Lapang from Spotlight or Finder and the same panel appears in a normal window. The panel shows:
+The menu bar shows free disk space (`41G`) and adds a warning sign when space is low or filling fast. The label is kept narrow on purpose: on a notched MacBook, menu bar items that don't fit are silently hidden. If that happens anyway, open Lapang from Spotlight or Finder and the [Lapang window](#the-window) opens instead. The panel shows:
 
 - **Things to clean**: what's worth acting on right now, at the top: build caches whose project is gone or unused for days, stale processes, servers still running from a deleted folder, running simulators, and the build output of merged worktrees nobody has touched for days. Each has its own button, plus one "Clean all". Everything else folds into a single line until you open it.
 - **Memory**: in the header next to disk: memory pressure, RAM used, swap, and a 24-hour pressure strip like Activity Monitor's ("under pressure 78% of the last 24 h"). "Memory users" lists the apps using the most memory by footprint, helpers included, with a Quit button for apps and Shut down for simulators.
@@ -24,6 +24,19 @@ The menu bar shows free disk space (`41G`) and adds a warning sign when space is
 - **Custom sections**: anything else, from your own scripts (see below).
 
 Destructive buttons always ask first. Folder sizes are measured in the background every 30 minutes, because `du` on big caches is slow.
+
+## The window
+
+The panel is for a quick glance. For everything at once, open the Lapang window: the window button at the top of the panel, **Open Lapang window** in the gear menu, ⌘0 while Lapang is active, or Lapang from Spotlight or Finder.
+
+<p align="center"><img src="docs/window.png" width="760" alt="The Lapang window: a sidebar of sections, disk and memory charts, things to clean, memory users and recent actions"></p>
+
+- **Overview**: free disk with the 24-hour or 7-day chart and its forecast, memory with the pressure strip and a swap chart, things to clean with Clean all, your top memory users and the last few actions.
+- **Disk** and **Memory**: bigger charts, what grew, how much the measured folders take, RAM used over 24 hours, and every memory user in a table.
+- **A page per section**: processes, simulators, worktrees, ports, Xcode build caches, package caches and your custom sections, as sortable tables (click a column) with the same actions as the panel. Double-click a row to reveal it in Finder or open it in the browser; right-click for more.
+- **Activity**: the action log as a timeline by day, a Clean all with its items under it, filterable by freed disk, freed memory or errors.
+
+The sidebar follows what the panel shows: a section appears when there's something to show. The window is resizable and remembers its size, place and page. ⌘R refreshes and ⌘W closes it; Lapang stays in the menu bar.
 
 ## Build and run
 
@@ -135,10 +148,11 @@ The section runs on every refresh, so keep it fast (well under a second).
 
 The app icon is drawn in code: `xcrun swift Support/make-icon.swift` regenerates `Support/AppIcon.icns` and `docs/icon.png`.
 
-`Lapang --render out.png` draws the full panel off-screen with live data and exits. It's useful for checking layout without clicking around the menu bar. Add `--demo` to use built-in sample data, `--light` for the light appearance, and `--open "Simulators,Memory"` to show sections opened. To try actions on throwaway targets, set `LAPANG_HOME` to another folder: Lapang then reads its config from there, keeps its data there and expands `~` to it. The README screenshot is made with:
+`Lapang --render out.png` draws the full panel off-screen with live data and exits. It's useful for checking layout without clicking around the menu bar. Add `--demo` to use built-in sample data (including a sample action log), `--light` for the light appearance, and `--open "Simulators,Memory"` to show sections opened. `--window [page]` draws the window at its default size instead, on its overview or on a page such as `memory`, `worktrees`, `xcode` or `activity`. To try actions on throwaway targets, set `LAPANG_HOME` to another folder: Lapang then reads its config from there, keeps its data there and expands `~` to it. The README screenshot is made with:
 
 ```bash
 ./build.sh --no-install && build/Lapang.app/Contents/MacOS/Lapang --render docs/screenshot.png --demo --light
+build/Lapang.app/Contents/MacOS/Lapang --render docs/window.png --demo --light --window
 ```
 
 ## License

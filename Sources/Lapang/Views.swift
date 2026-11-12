@@ -33,7 +33,13 @@ extension EnvironmentValues {
         get { self[OpenFoldsKey.self] }
         set { self[OpenFoldsKey.self] = newValue }
     }
+    /// Set by the window: a fold shows only its rows, as the page for its section.
+    var foldAsPage: Bool {
+        get { self[FoldAsPageKey.self] }
+        set { self[FoldAsPageKey.self] = newValue }
+    }
 }
+private struct FoldAsPageKey: EnvironmentKey { static let defaultValue = false }
 
 /// One summary line (icon, title, value, chevron) that opens to show its rows.
 struct Fold<Content: View>: View {
@@ -44,6 +50,7 @@ struct Fold<Content: View>: View {
     let content: Content
     @AppStorage private var open: Bool
     @Environment(\.openFolds) private var forced
+    @Environment(\.foldAsPage) private var asPage
     @State private var hovering = false
 
     init(_ title: String, icon: String, value: String, attention: Bool = false, @ViewBuilder content: () -> Content) {
@@ -56,8 +63,16 @@ struct Fold<Content: View>: View {
     }
 
     var body: some View {
+        if asPage {
+            VStack(alignment: .leading, spacing: 0) { content }
+        } else {
+            folded
+        }
+    }
+
+    private var folded: some View {
         let isOpen = forced.map { $0.contains(title) } ?? open
-        VStack(alignment: .leading, spacing: 0) {
+        return VStack(alignment: .leading, spacing: 0) {
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) { open.toggle() }
             } label: {
@@ -206,6 +221,9 @@ struct Header: View {
                     .font(.system(size: 26, weight: .semibold, design: .rounded))
                     .foregroundStyle(s.diskLevel == .ok ? Color.primary : s.diskLevel.color)
                 Text(String(format: "free of %.0f GB", s.totalGB)).foregroundStyle(.secondary)
+                Spacer()
+                Button { AppDelegate.openWindow() } label: { Image(systemName: "macwindow") }
+                    .buttonStyle(.borderless).foregroundStyle(.secondary).help("Open in window (⌘0)")
             }
             Bar(value: s.usedFraction, color: s.diskLevel == .ok ? Color.secondary : s.diskLevel.color)
             if day.count >= 2 {
@@ -225,13 +243,7 @@ struct MemoryLine: View {
     let s: Snapshot
 
     var body: some View {
-        let (label, color): (String, Color) = {
-            switch s.pressureLevel {
-            case .ok: return ("Normal", .secondary)
-            case .warn: return ("Under pressure", .orange)
-            case .crit: return ("Critical", .red)
-            }
-        }()
+        let (label, color) = (s.pressureText, s.pressureLevel.color)
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text("Memory").fontWeight(.medium)
@@ -272,6 +284,7 @@ struct MemoryLine: View {
 /// grey when normal, orange under pressure, red when critical, faint where there's no data yet.
 struct PressureStrip: View {
     let points: [MemoryPoint]
+    var height: CGFloat = 8
 
     var body: some View {
         Canvas { ctx, size in
@@ -295,8 +308,8 @@ struct PressureStrip: View {
                 ctx.fill(Path(CGRect(x: CGFloat(i) * w, y: 0, width: w + 0.5, height: size.height)), with: .color(color))
             }
         }
-        .frame(height: 8)
-        .clipShape(Capsule())
+        .frame(height: height)
+        .clipShape(RoundedRectangle(cornerRadius: height / 2))
         .help("Memory pressure over the last 24 hours, oldest on the left")
     }
 }
@@ -459,6 +472,8 @@ extension Snapshot {
 struct ChoresBlock: View {
     @EnvironmentObject var m: Monitor
     let s: Snapshot
+    /// In the window: a card, with Clean all beside the heading.
+    var wide = false
 
     var body: some View {
         let chores = s.chores
@@ -469,13 +484,17 @@ struct ChoresBlock: View {
                     Image(systemName: "checkmark.circle").foregroundStyle(.secondary)
                     Text("Nothing to clean")
                 }
-                .padding(.horizontal, 14).padding(.vertical, 10)
+                .padding(.horizontal, wide ? 0 : 14).padding(.vertical, wide ? 0 : 10)
             } else {
                 HStack(spacing: 8) {
                     Circle().fill(Color.orange).frame(width: 6, height: 6)
                     Text(chores.count == 1 ? "1 thing to clean" : "\(chores.count) things to clean").fontWeight(.medium)
                     Spacer()
-                    if total > 0 { Text(human(kb: total)).foregroundStyle(.secondary) }
+                    if wide && chores.count > 1 {
+                        cleanAllButton(chores, total).frame(width: 170)
+                    } else if total > 0 {
+                        Text(human(kb: total)).foregroundStyle(.secondary)
+                    }
                 }
                 .padding(.bottom, 4)
                 ForEach(chores) { c in
@@ -486,25 +505,30 @@ struct ChoresBlock: View {
                         }
                     }
                 }
-                if chores.count > 1 {
-                    Group {
-                        if m.running.contains("clean-all") {
-                            ProgressView().controlSize(.small).frame(maxWidth: .infinity)
-                        } else {
-                            Button { cleanAll(chores) } label: {
-                                Text(total > 0 ? "Clean all · \(human(kb: total))" : "Clean all").frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.borderedProminent)
-                        }
-                    }
-                    .padding(.top, 8)
+                if chores.count > 1 && !wide {
+                    cleanAllButton(chores, total).padding(.top, 8)
                 }
             }
         }
-        .padding(chores.isEmpty ? 0 : 14)
-        .background(chores.isEmpty ? Color.clear : Color.primary.opacity(0.035))
-        .overlay(alignment: .bottom) { Divider() }
-        .overlay(alignment: .top) { Divider() }
+        .padding(chores.isEmpty && !wide ? 0 : 14)
+        .background(chores.isEmpty && !wide ? Color.clear : Color.primary.opacity(0.035))
+        .overlay(alignment: .bottom) { if !wide { Divider() } }
+        .overlay(alignment: .top) { if !wide { Divider() } }
+        .clipShape(RoundedRectangle(cornerRadius: wide ? 10 : 0))
+        .overlay { if wide { RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.1)) } }
+    }
+
+    @ViewBuilder
+    func cleanAllButton(_ chores: [Chore], _ total: Int64) -> some View {
+        if m.running.contains("clean-all") {
+            ProgressView().controlSize(.small).frame(maxWidth: .infinity)
+        } else {
+            Button { cleanAll(chores) } label: {
+                Text(total > 0 ? "Clean all · \(human(kb: total))" : "Clean all").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(wide ? .orange : nil)
+        }
     }
 
     func run(_ c: Chore) {
@@ -609,6 +633,7 @@ struct HistoryChart: View {
     let warn: Double
     let days: Int
     let forecast: Trend?
+    var height: CGFloat = 90
 
     var body: some View {
         let projection: [HistoryPoint] = {
@@ -637,10 +662,12 @@ struct HistoryChart: View {
         }
         .chartYScale(domain: 0 ... top)
         .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: days == 1 ? 4 : 7)) { _ in
-                if days == 1 {
+            if days == 1 {
+                AxisMarks(values: hourTicks(points.first?.t ?? .now, (projection.last ?? points.last)?.t ?? .now, every: 6)) { _ in
                     AxisValueLabel(format: .dateTime.hour())
-                } else {
+                }
+            } else {
+                AxisMarks(values: .automatic(desiredCount: 7)) { _ in
                     AxisValueLabel(format: .dateTime.weekday(.abbreviated))
                 }
             }
@@ -651,8 +678,24 @@ struct HistoryChart: View {
                 AxisValueLabel { if let g = v.as(Double.self) { Text("\(Int(g))G") } }
             }
         }
-        .frame(height: 90)
+        .frame(height: height)
     }
+}
+
+/// Hour marks every `step` hours of a time span, minus any so close to an end that the label
+/// would be cut off by the edge or run into the y axis.
+func hourTicks(_ from: Date, _ to: Date, every step: Int) -> [Date] {
+    let cal = Calendar.current
+    let span = to.timeIntervalSince(from)
+    guard span > 0, var t = cal.nextDate(after: from, matching: DateComponents(minute: 0), matchingPolicy: .nextTime)
+    else { return [] }
+    var out: [Date] = []
+    while t < to {
+        if cal.component(.hour, from: t) % step == 0, t.timeIntervalSince(from) > span * 0.06,
+           to.timeIntervalSince(t) > span * 0.12 { out.append(t) }
+        t = t.addingTimeInterval(3600)
+    }
+    return out
 }
 
 struct GrowthList: View {
@@ -702,30 +745,45 @@ struct XcodeFold: View {
         Fold("Xcode build caches", icon: "hammer", value: "\(human(kb: s.derivedTotalKB)) · \(s.derived.count)") {
             ForEach(s.derived.sorted { ($0.sizeKB ?? 0) > ($1.sizeKB ?? 0) }) { e in
                 let age = e.idleDays == 0 ? "built today" : "built \(e.idleDays)d ago"
-                let tags: [String] = {
-                    switch e.status {
-                    case .orphan: return ["project gone"]
-                    case .new: return ["building"]
-                    case .live: return e.idleDays >= s.config.xcode.idleDays ? ["unused"] : []
-                    case .protected: return []
-                    }
-                }()
-                ItemRow(title: e.title, subtitle: "\(human(kb: e.sizeKB)) · \(age)", tags: tags,
+                ItemRow(title: e.title, subtitle: "\(human(kb: e.sizeKB)) · \(age)", tags: e.tags(idleDays: s.config.xcode.idleDays),
                         help: e.projectDir.map(Paths.abbreviate) ?? e.name) { hovering in
-                    if e.status == .protected {
-                        Image(systemName: "lock").foregroundStyle(.tertiary).frame(width: 22)
-                            .help("Protected in config.json")
-                    } else {
-                        HoverAction(key: "dd-\(e.name)", icon: "trash", help: "Delete this build cache", visible: hovering) {
-                            m.act("dd-\(e.name)", confirm: .init(
-                                title: "Delete the build cache for \(e.title)?",
-                                message: "\(human(kb: e.sizeKB)). The next build of this project starts from scratch.",
-                                button: "Delete")) { Actions.deleteDerived([e], root: root) }
-                        }
-                    }
+                    DerivedAction(e: e, root: root, visible: hovering)
                 }
             }
             SizesNote(s: s)
+        }
+    }
+}
+
+extension DerivedEntry {
+    func tags(idleDays: Int) -> [String] {
+        switch status {
+        case .orphan: return ["project gone"]
+        case .new: return ["building"]
+        case .live: return self.idleDays >= idleDays ? ["unused"] : []
+        case .protected: return []
+        }
+    }
+}
+
+/// A build cache's delete button, or a lock when it's protected; in the fold and the window's table.
+struct DerivedAction: View {
+    @EnvironmentObject var m: Monitor
+    let e: DerivedEntry
+    let root: String
+    var visible = true
+
+    var body: some View {
+        if e.status == .protected {
+            Image(systemName: "lock").foregroundStyle(.tertiary).frame(width: 22)
+                .help("Protected in config.json")
+        } else {
+            HoverAction(key: "dd-\(e.name)", icon: "trash", help: "Delete this build cache", visible: visible) {
+                m.act("dd-\(e.name)", confirm: .init(
+                    title: "Delete the build cache for \(e.title)?",
+                    message: "\(human(kb: e.sizeKB)). The next build of this project starts from scratch.",
+                    button: "Delete")) { Actions.deleteDerived([e], root: root) }
+            }
         }
     }
 }
@@ -758,18 +816,28 @@ struct CachesFold: View {
             ForEach(s.caches.sorted { ($0.sizeKB ?? 0) > ($1.sizeKB ?? 0) }) { c in
                 ItemRow(title: c.name, subtitle: human(kb: c.sizeKB) + (c.note.map { " · " + $0 } ?? ""),
                         help: Paths.abbreviate(c.path)) { hovering in
-                    if c.clearable {
-                        HoverAction(key: "cache-\(c.id)", icon: "trash", help: "Clear", visible: hovering) {
-                            m.act("cache-\(c.id)", confirm: .init(
-                                title: "Clear the \(c.name) cache?",
-                                message: "\(human(kb: c.sizeKB)) in \(Paths.abbreviate(c.path)). It refills on the next install.",
-                                button: "Clear")) { Actions.clearCache(c) }
-                        }
-                    } else {
-                        Color.clear.frame(width: 22, height: 1)
-                    }
+                    CacheAction(c: c, visible: hovering)
                 }
             }
+        }
+    }
+}
+
+struct CacheAction: View {
+    @EnvironmentObject var m: Monitor
+    let c: CacheInfo
+    var visible = true
+
+    var body: some View {
+        if c.clearable {
+            HoverAction(key: "cache-\(c.id)", icon: "trash", help: "Clear", visible: visible) {
+                m.act("cache-\(c.id)", confirm: .init(
+                    title: "Clear the \(c.name) cache?",
+                    message: "\(human(kb: c.sizeKB)) in \(Paths.abbreviate(c.path)). It refills on the next install.",
+                    button: "Clear")) { Actions.clearCache(c) }
+            }
+        } else {
+            Color.clear.frame(width: 22, height: 1)
         }
     }
 }
@@ -803,21 +871,14 @@ struct ProcessFold: View {
                 ItemRow(title: kids.isEmpty ? "\(p.name) MCP server" : "\(p.name) MCP + language server",
                         subtitle: [owner, "up \(p.uptime)", human(bytes: Int64(size))].filter { !$0.isEmpty }.joined(separator: " · "),
                         tags: tags, help: idleHelp(p)) { hovering in
-                    HoverAction(key: "kill-\(p.pid)", icon: "xmark.circle", help: "Stop", visible: hovering) {
-                        m.act("kill-\(p.pid)", confirm: .init(
-                            title: "Stop this MCP server?",
-                            message: "\(p.session ?? "The session that started it") loses those tools until it restarts.",
-                            button: "Stop")) { Actions.kill(p, children: kids) }
-                    }
+                    ProcessAction(p: p, s: s, visible: hovering)
                 }
             }
             ForEach(others) { p in
                 ItemRow(title: p.cwd.isEmpty ? p.name : p.cwd.split(separator: "/").suffix(2).joined(separator: "/"),
                         subtitle: "\(Self.kindName[p.kind] ?? p.kind) · up \(p.uptime) · \(human(bytes: Int64(p.rssBytes)))",
                         tags: p.stale ? ["stale"] : [], help: "pid \(p.pid) · \(Paths.abbreviate(p.cwd))") { hovering in
-                    HoverAction(key: "kill-\(p.pid)", icon: "xmark.circle", help: "Kill", visible: hovering) {
-                        m.act("kill-\(p.pid)") { Actions.kill(p) }
-                    }
+                    ProcessAction(p: p, s: s, visible: hovering)
                 }
             }
             MCPCleanupNote(s: s, mcp: mcp)
@@ -831,6 +892,30 @@ struct ProcessFold: View {
                          : "No tool calls since \(since.formatted(date: .omitted, time: .shortened))")
         }
         return lines.joined(separator: "\n")
+    }
+}
+
+/// Stop for an MCP server (with its language server), Kill for anything else.
+struct ProcessAction: View {
+    @EnvironmentObject var m: Monitor
+    let p: DevProc
+    let s: Snapshot
+    var visible = true
+
+    var body: some View {
+        if p.kind == "mcp" {
+            let kids = s.procs.filter { $0.ppid == p.pid }
+            HoverAction(key: "kill-\(p.pid)", icon: "xmark.circle", help: "Stop", visible: visible) {
+                m.act("kill-\(p.pid)", confirm: .init(
+                    title: "Stop this MCP server?",
+                    message: "\(p.session ?? "The session that started it") loses those tools until it restarts.",
+                    button: "Stop")) { Actions.kill(p, children: kids) }
+            }
+        } else {
+            HoverAction(key: "kill-\(p.pid)", icon: "xmark.circle", help: "Kill", visible: visible) {
+                m.act("kill-\(p.pid)") { Actions.kill(p) }
+            }
+        }
     }
 }
 
@@ -954,21 +1039,7 @@ struct WorktreeRow: View {
         let parts = u.breakdown.prefix(2).map { "\($0.name) \(human(kb: $0.kb))" }
         let size = u.outputs.isEmpty ? "no build output" : (parts.isEmpty ? "measuring…" : parts.joined(separator: " · "))
         ItemRow(title: u.name, subtitle: "\(size) · \(u.activityText)", tags: u.tags, help: help) { hovering in
-            HStack(spacing: 2) {
-                if u.agentOpen {
-                    Image(systemName: "lock").foregroundStyle(.tertiary).frame(width: 22)
-                        .help("A Claude Code session is working here")
-                } else {
-                    if !u.outputs.isEmpty {
-                        HoverAction(key: "wt-clean-" + u.path, icon: "eraser", help: "Clean build output", visible: hovering) {
-                            m.act("wt-clean-" + u.path, confirm: WorktreesFold.cleanConfirm([u])) { WorktreeActions.cleanOutput([u]) }
-                        }
-                    }
-                    HoverAction(key: "wt-rm-" + u.path, icon: "trash", help: "Remove worktree", visible: hovering) {
-                        m.act("wt-rm-" + u.path, check: { removeConfirm(u) }) { WorktreeActions.remove(u) }
-                    }
-                }
-            }
+            WorktreeAction(u: u, visible: hovering)
         }
         .onTapGesture { m.reveal(u.path) }
     }
@@ -981,6 +1052,32 @@ struct WorktreeRow: View {
         }
         lines.append("Click to reveal in Finder")
         return lines.joined(separator: "\n")
+    }
+}
+
+struct WorktreeAction: View {
+    @EnvironmentObject var m: Monitor
+    let u: WorktreeUnit
+    var visible = true
+
+    var body: some View {
+        HStack(spacing: 2) {
+            if u.agentOpen {
+                Image(systemName: "lock").foregroundStyle(.tertiary).frame(width: 22)
+                    .help("A Claude Code session is working here")
+            } else {
+                if !u.outputs.isEmpty {
+                    HoverAction(key: "wt-clean-" + u.path, icon: "eraser", help: "Clean build output", visible: visible) {
+                        m.act("wt-clean-" + u.path, confirm: WorktreesFold.cleanConfirm([u])) { WorktreeActions.cleanOutput([u]) }
+                    }
+                } else {
+                    Color.clear.frame(width: 22, height: 1)
+                }
+                HoverAction(key: "wt-rm-" + u.path, icon: "trash", help: "Remove worktree", visible: visible) {
+                    m.act("wt-rm-" + u.path, check: { removeConfirm(u) }) { WorktreeActions.remove(u) }
+                }
+            }
+        }
     }
 }
 
@@ -1009,27 +1106,37 @@ struct PortsFold: View {
             }
             ForEach(ls) { l in
                 ItemRow(title: l.title, subtitle: l.subtitle, tags: l.tags, help: l.help) { hovering in
-                    HStack(spacing: 2) {
-                        if let url = l.url {
-                            Button { m.open(url) } label: { Image(systemName: "arrow.up.right.square") }
-                                .buttonStyle(.borderless).help("Open \(url)")
-                                .opacity(hovering ? 1 : 0).frame(width: 22)
-                        } else {
-                            Color.clear.frame(width: 22, height: 1)
-                        }
-                        if l.stoppable {
-                            HoverAction(key: "port-\(l.pid)", icon: "stop.circle", help: "Stop", visible: hovering) {
-                                m.act("port-\(l.pid)", confirm: PortActions.confirm(l)) { PortActions.stop(l) }
-                            }
-                        } else {
-                            Image(systemName: "lock").foregroundStyle(.tertiary).frame(width: 22)
-                                .help(l.stopNote ?? "")
-                        }
-                    }
+                    PortAction(l: l, visible: hovering)
                 }
             }
             Text(verbatim: "Your own servers on ports \(cfg.minPort)–\(cfg.maxPort), reachable only from this Mac unless tagged. App helpers and system services are left out.")
                 .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
+        }
+    }
+}
+
+struct PortAction: View {
+    @EnvironmentObject var m: Monitor
+    let l: Listener
+    var visible = true
+
+    var body: some View {
+        HStack(spacing: 2) {
+            if let url = l.url {
+                Button { m.open(url) } label: { Image(systemName: "arrow.up.right.square") }
+                    .buttonStyle(.borderless).help("Open \(url)")
+                    .opacity(visible ? 1 : 0).frame(width: 22)
+            } else {
+                Color.clear.frame(width: 22, height: 1)
+            }
+            if l.stoppable {
+                HoverAction(key: "port-\(l.pid)", icon: "stop.circle", help: "Stop", visible: visible) {
+                    m.act("port-\(l.pid)", confirm: PortActions.confirm(l)) { PortActions.stop(l) }
+                }
+            } else {
+                Image(systemName: "lock").foregroundStyle(.tertiary).frame(width: 22)
+                    .help(l.stopNote ?? "")
+            }
         }
     }
 }
@@ -1047,11 +1154,21 @@ struct SimFold: View {
             ForEach(sims) { sim in
                 ItemRow(title: sim.name, subtitle: sim.usage.summary,
                         tags: sim.usage.projectGone ? ["project gone"] : [], help: sim.usage.detail) { hovering in
-                    HoverAction(key: "sim-\(sim.udid)", icon: "power", help: "Shut down", visible: hovering) {
-                        m.act("sim-\(sim.udid)") { Actions.shutdownSim(sim) }
-                    }
+                    SimAction(sim: sim, visible: hovering)
                 }
             }
+        }
+    }
+}
+
+struct SimAction: View {
+    @EnvironmentObject var m: Monitor
+    let sim: Sim
+    var visible = true
+
+    var body: some View {
+        HoverAction(key: "sim-\(sim.udid)", icon: "power", help: "Shut down", visible: visible) {
+            m.act("sim-\(sim.udid)") { Actions.shutdownSim(sim) }
         }
     }
 }
@@ -1068,27 +1185,39 @@ struct MemoryUsersFold: View {
             ForEach(s.memUsers) { u in
                 let subtitle = "\(human(bytes: Int64(u.bytes))) · \(u.processes) process\(u.processes == 1 ? "" : "es")"
                 ItemRow(title: u.name, subtitle: subtitle, help: u.bundlePath.map(Paths.abbreviate)) { hovering in
-                    switch u.kind {
-                    case .simulators where !(s.sims ?? []).isEmpty:
-                        HoverAction(key: "mem-sims", icon: "power", help: "Shut down all simulators", visible: hovering) {
-                            let sims = s.sims ?? []
-                            m.act("mem-sims") { Actions.shutdownAllSims(sims) }
-                        }
-                    case .app where u.bundlePath.map(MemoryActions.isQuittable) == true:
-                        let bundle = u.bundlePath!
-                        HoverAction(key: "quit-\(u.name)", icon: "xmark.circle", help: "Quit \(u.name)", visible: hovering) {
-                            m.act("quit-\(u.name)", confirm: .init(
-                                title: "Quit \(u.name)?",
-                                message: "Frees about \(human(bytes: Int64(u.bytes))). It quits like choosing Quit from its menu, so it can still ask to save.",
-                                button: "Quit")) { MemoryActions.quit(bundlePath: bundle) }
-                        }
-                    default:
-                        Color.clear.frame(width: 22, height: 1)
-                    }
+                    MemoryUserAction(u: u, s: s, visible: hovering)
                 }
             }
             Text("Memory footprint, as in Activity Monitor. Apps include their helper processes.")
                 .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
+        }
+    }
+}
+
+/// Quit for an app, Shut down for the simulators.
+struct MemoryUserAction: View {
+    @EnvironmentObject var m: Monitor
+    let u: MemoryUser
+    let s: Snapshot
+    var visible = true
+
+    var body: some View {
+        switch u.kind {
+        case .simulators where !(s.sims ?? []).isEmpty:
+            HoverAction(key: "mem-sims", icon: "power", help: "Shut down all simulators", visible: visible) {
+                let sims = s.sims ?? []
+                m.act("mem-sims") { Actions.shutdownAllSims(sims) }
+            }
+        case .app where u.bundlePath.map(MemoryActions.isQuittable) == true:
+            let bundle = u.bundlePath!
+            HoverAction(key: "quit-\(u.name)", icon: "xmark.circle", help: "Quit \(u.name)", visible: visible) {
+                m.act("quit-\(u.name)", confirm: .init(
+                    title: "Quit \(u.name)?",
+                    message: "Frees about \(human(bytes: Int64(u.bytes))). It quits like choosing Quit from its menu, so it can still ask to save.",
+                    button: "Quit")) { MemoryActions.quit(bundlePath: bundle) }
+            }
+        default:
+            Color.clear.frame(width: 22, height: 1)
         }
     }
 }

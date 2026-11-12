@@ -43,8 +43,12 @@ enum ActionLog {
         append(e)
     }
 
+    /// Sample entries for `--render --demo`, so a published image never shows this Mac's log.
+    nonisolated(unsafe) static var demo: [ActionEntry]?
+
     /// Newest first.
     static func recent(_ limit: Int? = nil) -> [ActionEntry] {
+        if let demo { return limit.map { Array(demo.prefix($0)) } ?? demo }
         guard let d = FileManager.default.contents(atPath: file) else { return [] }
         let all = Array(decode(d).reversed())
         return limit.map { Array(all.prefix($0)) } ?? all
