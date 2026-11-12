@@ -1,12 +1,16 @@
 import Charts
 import SwiftUI
 
+// Layout: a header (free space, sparkline, fill rate), then "things to clean" when there are
+// any, then one line per section that opens on click. Grey throughout; orange is reserved
+// for "needs attention" (red when the disk is critically full).
+
 // MARK: - Building blocks
 
 extension Level {
     var color: Color {
         switch self {
-        case .ok: return .green
+        case .ok: return .secondary
         case .warn: return .orange
         case .crit: return .red
         }
@@ -15,69 +19,141 @@ extension Level {
 
 func toneColor(_ tone: String?) -> Color {
     switch tone {
-    case "good": return .green
     case "warn": return .orange
     case "bad": return .red
-    case "info": return .blue
+    case "good", "info": return .primary
     default: return .secondary
     }
 }
 
-/// A collapsible card; open/closed is remembered per title.
-struct Box<Trailing: View, Content: View>: View {
-    let title: String
-    let icon: String
-    let trailing: Trailing
-    let content: Content
-    @AppStorage private var open: Bool
-
-    init(_ title: String, icon: String, @ViewBuilder trailing: () -> Trailing, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.icon = icon
-        self.trailing = trailing()
-        self.content = content()
-        _open = AppStorage(wrappedValue: true, "open." + title)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.15)) { open.toggle() }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "chevron.right")
-                            .font(.caption2.weight(.bold))
-                            .rotationEffect(.degrees(open ? 90 : 0))
-                            .foregroundStyle(.tertiary)
-                        Image(systemName: icon).foregroundStyle(.secondary).frame(width: 16)
-                        Text(title).font(.headline)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                Spacer()
-                trailing
-            }
-            if open { content }
-        }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.045)))
+/// Which folds start open, for renders (the README screenshot); nil means the user's own state.
+private struct OpenFoldsKey: EnvironmentKey { static let defaultValue: Set<String>? = nil }
+extension EnvironmentValues {
+    var openFolds: Set<String>? {
+        get { self[OpenFoldsKey.self] }
+        set { self[OpenFoldsKey.self] = newValue }
     }
 }
 
-struct Bar: View {
-    let value: Double
-    let color: Color
+/// One summary line (icon, title, value, chevron) that opens to show its rows.
+struct Fold<Content: View>: View {
+    let title: String
+    let icon: String
+    let value: String
+    let attention: Bool
+    let content: Content
+    @AppStorage private var open: Bool
+    @Environment(\.openFolds) private var forced
+    @State private var hovering = false
+
+    init(_ title: String, icon: String, value: String, attention: Bool = false, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.icon = icon
+        self.value = value
+        self.attention = attention
+        self.content = content()
+        _open = AppStorage(wrappedValue: false, "fold." + title)
+    }
 
     var body: some View {
-        GeometryReader { g in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color.primary.opacity(0.08))
-                Capsule().fill(color.gradient).frame(width: max(6, g.size.width * min(max(value, 0), 1)))
+        let isOpen = forced.map { $0.contains(title) } ?? open
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { open.toggle() }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: icon).foregroundStyle(.secondary).frame(width: 18)
+                    Text(title)
+                    Spacer(minLength: 8)
+                    if attention { Circle().fill(Color.orange).frame(width: 6, height: 6) }
+                    Text(value).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+                    Image(systemName: isOpen ? "chevron.down" : "chevron.right")
+                        .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary).frame(width: 10)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 9)
+                .background(hovering ? Color.primary.opacity(0.05) : .clear)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
+            if isOpen {
+                VStack(alignment: .leading, spacing: 0) { content }
+                    .padding(.leading, 42).padding(.trailing, 14).padding(.bottom, 8)
+            }
+            Divider()
+        }
+    }
+}
+
+/// A list row whose trailing action can depend on whether the pointer is over it.
+struct ItemRow<Trailing: View>: View {
+    let title: String
+    var subtitle: String? = nil
+    var tags: [String] = []
+    var help: String? = nil
+    @ViewBuilder let trailing: (Bool) -> Trailing
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 5) {
+                    Text(title).lineLimit(1).truncationMode(.middle)
+                    ForEach(tags, id: \.self) { Tag(text: $0, color: .secondary) }
+                }
+                if let subtitle {
+                    Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                }
+            }
+            .help(help ?? "")
+            Spacer(minLength: 6)
+            trailing(hovering)
+        }
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+    }
+}
+
+/// A fixed-width text button, so stacked actions line up in one column.
+struct RowButton: View {
+    @EnvironmentObject var m: Monitor
+    let key: String
+    let title: String
+    let action: () -> Void
+
+    var body: some View {
+        Group {
+            if m.running.contains(key) {
+                ProgressView().controlSize(.small)
+            } else {
+                Button(action: action) { Text(title).frame(maxWidth: .infinity) }.controlSize(.small)
             }
         }
-        .frame(height: 8)
+        .frame(width: 84)
+    }
+}
+
+/// An icon action shown only while its row is hovered (or while it runs).
+struct HoverAction: View {
+    @EnvironmentObject var m: Monitor
+    let key: String
+    let icon: String
+    let help: String
+    let visible: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Group {
+            if m.running.contains(key) {
+                ProgressView().controlSize(.small)
+            } else {
+                Button(action: action) { Image(systemName: icon) }
+                    .buttonStyle(.borderless).help(help)
+                    .opacity(visible ? 1 : 0)
+            }
+        }
+        .frame(width: 22)
     }
 }
 
@@ -87,79 +163,26 @@ struct Tag: View {
 
     var body: some View {
         Text(text)
-            .font(.caption2.weight(.semibold))
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(Capsule().fill(color.opacity(0.15)))
+            .font(.caption2.weight(.medium))
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(Capsule().fill(Color.primary.opacity(0.07)))
             .foregroundStyle(color)
     }
 }
 
-/// Icon button that becomes a spinner while its action runs.
-struct ActionIcon: View {
-    @EnvironmentObject var m: Monitor
-    let key: String
-    let icon: String
-    let help: String
-    let action: () -> Void
+struct Bar: View {
+    let value: Double
+    let color: Color
+    var height: CGFloat = 6
 
     var body: some View {
-        Group {
-            if m.running.contains(key) {
-                ProgressView().controlSize(.small)
-            } else {
-                Button(action: action) { Image(systemName: icon) }
-                    .buttonStyle(.borderless)
-                    .help(help)
+        GeometryReader { g in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.primary.opacity(0.08))
+                Capsule().fill(color).frame(width: max(height, g.size.width * min(max(value, 0), 1)))
             }
         }
-        .frame(width: 22)
-    }
-}
-
-struct ActionButton: View {
-    @EnvironmentObject var m: Monitor
-    let key: String
-    let title: String
-    let action: () -> Void
-
-    var body: some View {
-        if m.running.contains(key) {
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
-                Text(title).foregroundStyle(.secondary)
-            }
-            .font(.callout)
-        } else {
-            Button(title, action: action).controlSize(.small)
-        }
-    }
-}
-
-struct Row<Trailing: View>: View {
-    let icon: String
-    var iconColor: Color = .secondary
-    let title: String
-    var subtitle: String? = nil
-    var tags: [(String, Color)] = []
-    var help: String? = nil
-    @ViewBuilder let trailing: () -> Trailing
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon).foregroundStyle(iconColor).frame(width: 18)
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 5) {
-                    Text(title).lineLimit(1).truncationMode(.middle)
-                    ForEach(tags.indices, id: \.self) { i in Tag(text: tags[i].0, color: tags[i].1) }
-                }
-                if let subtitle {
-                    Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                }
-            }
-            .help(help ?? "")
-            Spacer(minLength: 4)
-            trailing()
-        }
+        .frame(height: height)
     }
 }
 
@@ -170,50 +193,63 @@ struct Caption: View {
     }
 }
 
-// MARK: - Disk & memory
+// MARK: - Header
 
-struct DiskBox: View {
+struct Header: View {
     let s: Snapshot
-    @AppStorage("chartDays") private var days = 1
 
     var body: some View {
-        Box("Disk", icon: "internaldrive") {
-            switch s.diskLevel {
-            case .ok: s.forecastWarning ? Tag(text: "Filling fast", color: .orange) : Tag(text: "OK", color: .green)
-            case .warn: Tag(text: "Clean up soon", color: .orange)
-            case .crit: Tag(text: "Almost full", color: .red)
-            }
-        } content: {
+        let day = s.history.filter { Date().timeIntervalSince($0.t) <= 86400 }
+        VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(String(format: "%.0f GB", s.freeGB))
-                    .font(.system(size: 28, weight: .semibold, design: .rounded))
+                    .font(.system(size: 26, weight: .semibold, design: .rounded))
                     .foregroundStyle(s.diskLevel == .ok ? Color.primary : s.diskLevel.color)
                 Text(String(format: "free of %.0f GB", s.totalGB)).foregroundStyle(.secondary)
             }
-            Bar(value: s.usedFraction, color: s.diskLevel.color)
-            TrendLine(s: s)
-            let shown = s.history.filter { Date().timeIntervalSince($0.t) <= Double(days) * 86400 }
-            if shown.count >= 2 {
-                HStack {
-                    Caption(text: "Free space")
-                    Spacer()
-                    Picker("", selection: $days) {
-                        Text("24h").tag(1)
-                        Text("7d").tag(7)
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .controlSize(.small)
-                    .frame(width: 90)
-                }
-                HistoryChart(points: shown, warn: s.config.disk.warnGB, days: days,
-                             forecast: days == 1 ? s.trend : nil, freeGB: s.freeGB)
-            } else {
-                Text("A chart of free space fills in here, one point every 5 minutes.")
-                    .font(.caption).foregroundStyle(.secondary)
+            Bar(value: s.usedFraction, color: s.diskLevel == .ok ? Color.secondary : s.diskLevel.color)
+            if day.count >= 2 {
+                Sparkline(points: day, warn: s.config.disk.warnGB, trend: s.trend)
             }
-            GrowthList(s: s)
+            TrendLine(s: s)
         }
+        .padding(14)
+    }
+}
+
+struct Sparkline: View {
+    let points: [HistoryPoint]
+    let warn: Double
+    let trend: Trend
+
+    var body: some View {
+        let projection: [HistoryPoint] = {
+            guard trend.state == .filling, let last = points.last else { return [] }
+            let hours = min(4, trend.hoursToFull ?? 4)
+            return [last, HistoryPoint(t: last.t.addingTimeInterval(hours * 3600),
+                                       freeGB: max(0, last.freeGB + trend.ratePerDay / 24 * hours))]
+        }()
+        let top = max(points.map(\.freeGB).max() ?? 0, warn) * 1.15
+        Chart {
+            RuleMark(y: .value("Warn", warn))
+                .foregroundStyle(Color.secondary.opacity(0.5))
+                .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 3]))
+            ForEach(points) { p in
+                LineMark(x: .value("Time", p.t), y: .value("Free", p.freeGB), series: .value("S", "free"))
+                    .foregroundStyle(Color.secondary)
+                    .lineStyle(StrokeStyle(lineWidth: 1.5))
+            }
+            ForEach(projection) { p in
+                LineMark(x: .value("Time", p.t), y: .value("Free", p.freeGB), series: .value("S", "forecast"))
+                    .foregroundStyle(Color.secondary)
+                    .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
+            }
+        }
+        .chartXAxis(.hidden)
+        .chartYAxis(.hidden)
+        .chartYScale(domain: 0 ... top)
+        .frame(height: 34)
+        .help("Free space over the last 24 hours. The dotted line is \(Int(warn)) GB; the dashed end is the forecast.")
     }
 }
 
@@ -222,16 +258,14 @@ struct TrendLine: View {
 
     var body: some View {
         let t = s.trend
-        let (icon, color, text): (String, Color, String) = {
+        let urgent = s.forecastWarning || s.diskLevel != .ok
+        let text: String = {
             switch t.state {
             case .learning:
                 let mins = Int(t.span / 60)
-                return ("hourglass", .secondary,
-                        "Learning the fill rate (\(mins < 60 ? "\(mins) min" : "\(mins / 60) h") of data, needs 2 h)")
-            case .steady:
-                return ("equal.circle", .secondary, "Steady, no real change")
-            case .freeing:
-                return ("arrow.up.right.circle", .green, String(format: "Freeing up %.1f GB/day", t.ratePerDay))
+                return "Learning the fill rate (\(mins < 60 ? "\(mins) min" : "\(mins / 60) h") of 2 h)"
+            case .steady: return "Steady over the last 24 hours"
+            case .freeing: return String(format: "Freeing up %.1f GB/day", t.ratePerDay)
             case .filling:
                 var line = String(format: "Filling %.1f GB/day", -t.ratePerDay)
                 if let h = t.hoursToWarn, h > 0 {
@@ -239,63 +273,201 @@ struct TrendLine: View {
                 } else if let h = t.hoursToFull {
                     line += " · full in \(durationText(hours: h))"
                 }
-                return ("arrow.down.right.circle", s.forecastWarning || s.diskLevel != .ok ? .orange : .secondary, line)
+                return line
             }
         }()
         HStack(spacing: 6) {
-            Image(systemName: icon).foregroundStyle(color)
-            Text(text).foregroundStyle(color == .secondary ? Color.secondary : color)
+            if urgent { Circle().fill(s.diskLevel == .crit ? Color.red : Color.orange).frame(width: 6, height: 6) }
+            Text(text).foregroundStyle(urgent ? (s.diskLevel == .crit ? Color.red : Color.orange) : Color.secondary)
             Spacer()
             if t.sinceCleanup && t.state != .learning {
                 Text("since last cleanup").foregroundStyle(.tertiary)
             }
         }
         .font(.caption)
-        .help("A straight-line fit over the last 24 hours of free space, restarting after a cleanup.")
     }
 }
 
-struct GrowthList: View {
+// MARK: - Things to clean
+
+struct Chore: Identifiable {
+    enum Kind {
+        case cache(DerivedEntry)
+        case process(DevProc)
+        case simulators([Sim])
+    }
+    let id: String
+    let icon: String
+    let title: String
+    let subtitle: String
+    let button: String
+    let kind: Kind
+    let kb: Int64
+}
+
+extension Snapshot {
+    /// What's worth cleaning right now: orphaned or unused build caches, stale processes, running simulators.
+    var chores: [Chore] {
+        var out: [Chore] = []
+        let idle = config.xcode.idleDays
+        for e in derived.sorted(by: { ($0.sizeKB ?? 0) > ($1.sizeKB ?? 0) }) {
+            if e.status == .orphan {
+                out.append(Chore(id: "dd-" + e.name, icon: "folder.badge.minus", title: e.title,
+                                 subtitle: "Build cache, project gone · \(human(kb: e.sizeKB))",
+                                 button: "Delete", kind: .cache(e), kb: e.sizeKB ?? 0))
+            } else if e.status == .live && e.idleDays >= idle {
+                out.append(Chore(id: "dd-" + e.name, icon: "folder", title: e.title,
+                                 subtitle: "Build cache, unused \(e.idleDays) days · \(human(kb: e.sizeKB))",
+                                 button: "Delete", kind: .cache(e), kb: e.sizeKB ?? 0))
+            }
+        }
+        for p in procs where p.stale {
+            let why = p.ppid == 1 ? "parent exited" : "folder gone"
+            let kind = ProcessFold.kindName[p.kind] ?? p.name
+            let place = p.cwd.split(separator: "/").suffix(2).joined(separator: "/")
+            out.append(Chore(id: "kill-\(p.pid)", icon: "bolt.horizontal", title: place.isEmpty ? kind : place,
+                             subtitle: "\(kind), stale (\(why))", button: "Kill", kind: .process(p), kb: 0))
+        }
+        if let sims, !sims.isEmpty {
+            out.append(Chore(id: "sims", icon: "iphone",
+                             title: sims.count == 1 ? "1 simulator running" : "\(sims.count) simulators running",
+                             subtitle: sims.map(\.name).joined(separator: ", "),
+                             button: "Shut down", kind: .simulators(sims), kb: 0))
+        }
+        return out
+    }
+}
+
+struct ChoresBlock: View {
+    @EnvironmentObject var m: Monitor
     let s: Snapshot
 
     var body: some View {
-        if let g = s.growth {
-            VStack(alignment: .leading, spacing: 4) {
-                Caption(text: "Change since \(g.since.formatted(.relative(presentation: .named)))")
-                    .padding(.top, 4)
-                if g.items.isEmpty {
-                    Text("No measured folder changed by more than 50 MB.").font(.caption).foregroundStyle(.secondary)
+        let chores = s.chores
+        let total = chores.reduce(Int64(0)) { $0 + $1.kb }
+        VStack(alignment: .leading, spacing: 0) {
+            if chores.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle").foregroundStyle(.secondary)
+                    Text("Nothing to clean")
                 }
-                ForEach(g.items) { i in
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text((i.deltaKB > 0 ? "+" : "−") + human(kb: abs(i.deltaKB)))
-                            .monospacedDigit()
-                            .foregroundStyle(i.deltaKB > 0 ? Color.orange : Color.green)
-                            .frame(width: 64, alignment: .trailing)
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(i.name)
-                            if let d = i.detail {
-                                Text(d).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                            }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+            } else {
+                HStack(spacing: 8) {
+                    Circle().fill(Color.orange).frame(width: 6, height: 6)
+                    Text(chores.count == 1 ? "1 thing to clean" : "\(chores.count) things to clean").fontWeight(.medium)
+                    Spacer()
+                    if total > 0 { Text(human(kb: total)).foregroundStyle(.secondary) }
+                }
+                .padding(.bottom, 4)
+                ForEach(chores) { c in
+                    HStack(spacing: 10) {
+                        Image(systemName: c.icon).foregroundStyle(.secondary).frame(width: 18)
+                        ItemRow(title: c.title, subtitle: c.subtitle) { _ in
+                            RowButton(key: c.id, title: c.button) { run(c) }
                         }
                     }
-                    .font(.caption)
                 }
-                if let u = g.untrackedKB, abs(u) >= 500 * 1024 {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text((u > 0 ? "+" : "−") + human(kb: abs(u)))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                            .frame(width: 64, alignment: .trailing)
-                        Text("Everything else (simulators, app data, downloads…)").foregroundStyle(.secondary)
+                if chores.count > 1 {
+                    Group {
+                        if m.running.contains("clean-all") {
+                            ProgressView().controlSize(.small).frame(maxWidth: .infinity)
+                        } else {
+                            Button { cleanAll(chores) } label: {
+                                Text(total > 0 ? "Clean all · \(human(kb: total))" : "Clean all").frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
                     }
-                    .font(.caption)
+                    .padding(.top, 8)
                 }
             }
-        } else if s.sizesMeasuredAt != nil {
-            Text("What's growing shows up after a second size check, about 30 minutes from the first.")
-                .font(.caption).foregroundStyle(.secondary)
         }
+        .padding(chores.isEmpty ? 0 : 14)
+        .background(chores.isEmpty ? Color.clear : Color.primary.opacity(0.035))
+        .overlay(alignment: .bottom) { Divider() }
+        .overlay(alignment: .top) { Divider() }
+    }
+
+    func run(_ c: Chore) {
+        let root = s.derivedDataRoot
+        switch c.kind {
+        case .cache(let e):
+            m.act(c.id, confirm: .init(title: "Delete the build cache for \(e.title)?",
+                                       message: "\(human(kb: e.sizeKB)). The next build of this project starts from scratch.",
+                                       button: "Delete")) { Actions.deleteDerived([e], root: root) }
+        case .process(let p):
+            m.act(c.id) { Actions.kill(p) }
+        case .simulators:
+            m.act(c.id) { Actions.shutdownAllSims() }
+        }
+    }
+
+    func cleanAll(_ chores: [Chore]) {
+        var caches: [DerivedEntry] = [], procs: [DevProc] = [], sims = false
+        for c in chores {
+            switch c.kind {
+            case .cache(let e): caches.append(e)
+            case .process(let p): procs.append(p)
+            case .simulators: sims = true
+            }
+        }
+        var parts: [String] = []
+        if !caches.isEmpty {
+            parts.append("delete \(caches.count) build cache\(caches.count == 1 ? "" : "s") (\(human(kb: caches.reduce(0) { $0 + ($1.sizeKB ?? 0) })))")
+        }
+        if !procs.isEmpty { parts.append("kill \(procs.count) stale process\(procs.count == 1 ? "" : "es")") }
+        if sims { parts.append("shut down the simulators") }
+        let root = s.derivedDataRoot
+        let (toDelete, toKill, shutDown) = (caches, procs, sims)
+        m.act("clean-all", confirm: .init(title: "Clean all?", message: "This will " + parts.joined(separator: ", ") + ".",
+                                          button: "Clean all")) {
+            var msg = "Cleaned"
+            if !toDelete.isEmpty, let r = Actions.deleteDerived(toDelete, root: root) { msg = r }
+            if !toKill.isEmpty { _ = Actions.killAll(toKill) }
+            if shutDown { _ = Actions.shutdownAllSims() }
+            return msg
+        }
+    }
+}
+
+// MARK: - Folds
+
+struct GrowthFold: View {
+    let s: Snapshot
+    @AppStorage("chartDays") private var days = 1
+
+    var body: some View {
+        let shown = s.history.filter { Date().timeIntervalSince($0.t) <= Double(days) * 86400 }
+        Fold("What grew", icon: "chart.line.uptrend.xyaxis", value: dayChange) {
+            if shown.count >= 2 {
+                HStack {
+                    Caption(text: "Free space")
+                    Spacer()
+                    Picker("", selection: $days) {
+                        Text("24h").tag(1)
+                        Text("7d").tag(7)
+                    }
+                    .pickerStyle(.segmented).labelsHidden().controlSize(.small).frame(width: 90)
+                }
+                .padding(.top, 2)
+                HistoryChart(points: shown, warn: s.config.disk.warnGB, days: days,
+                             forecast: days == 1 ? s.trend : nil)
+                    .padding(.vertical, 6)
+            }
+            GrowthList(s: s)
+        }
+    }
+
+    /// Disk used over the last 24 hours (or as much history as there is).
+    var dayChange: String {
+        let now = Date()
+        guard let first = s.history.first(where: { now.timeIntervalSince($0.t) <= 86400 }),
+              let last = s.history.last, last.t.timeIntervalSince(first.t) >= 3600 else { return "—" }
+        let used = first.freeGB - last.freeGB
+        let span = now.timeIntervalSince(first.t) >= 20 * 3600 ? " in 24h" : " so far"
+        if abs(used) < 0.05 { return "No change" + span }
+        return String(format: "%.1f GB %@", abs(used), used > 0 ? "used" : "freed") + span
     }
 }
 
@@ -304,37 +476,31 @@ struct HistoryChart: View {
     let warn: Double
     let days: Int
     let forecast: Trend?
-    let freeGB: Double
 
     var body: some View {
-        // dashed projection up to 6 hours ahead while the disk is filling
         let projection: [HistoryPoint] = {
             guard let f = forecast, f.state == .filling, let last = points.last else { return [] }
             let hours = min(6, f.hoursToFull ?? 6)
-            let end = last.t.addingTimeInterval(hours * 3600)
-            return [last, HistoryPoint(t: end, freeGB: max(0, last.freeGB + f.ratePerDay / 24 * hours))]
+            return [last, HistoryPoint(t: last.t.addingTimeInterval(hours * 3600),
+                                       freeGB: max(0, last.freeGB + f.ratePerDay / 24 * hours))]
         }()
         let top = max(points.map(\.freeGB).max() ?? 0, warn) * 1.25
         Chart {
             ForEach(points) { p in
                 AreaMark(x: .value("Time", p.t), y: .value("Free GB", p.freeGB))
-                    .foregroundStyle(.linearGradient(colors: [.accentColor.opacity(0.25), .accentColor.opacity(0.02)],
-                                                     startPoint: .top, endPoint: .bottom))
+                    .foregroundStyle(Color.secondary.opacity(0.12))
                 LineMark(x: .value("Time", p.t), y: .value("Free GB", p.freeGB), series: .value("Series", "free"))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(Color.secondary)
                     .lineStyle(StrokeStyle(lineWidth: 1.5))
             }
             ForEach(projection) { p in
                 LineMark(x: .value("Time", p.t), y: .value("Free GB", p.freeGB), series: .value("Series", "forecast"))
-                    .foregroundStyle(Color.orange.opacity(0.8))
+                    .foregroundStyle(Color.secondary)
                     .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
             }
             RuleMark(y: .value("Warn", warn))
-                .foregroundStyle(.orange.opacity(0.7))
+                .foregroundStyle(Color.orange.opacity(0.6))
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                .annotation(position: .top, alignment: .leading) {
-                    Text("\(Int(warn)) GB").font(.caption2).foregroundStyle(.orange)
-                }
         }
         .chartYScale(domain: 0 ... top)
         .chartXAxis {
@@ -356,209 +522,77 @@ struct HistoryChart: View {
     }
 }
 
-struct MemoryBox: View {
+struct GrowthList: View {
     let s: Snapshot
 
     var body: some View {
-        Box("Memory", icon: "memorychip") {
-            switch s.pressureLevel {
-            case .ok: Tag(text: "Normal", color: .green)
-            case .warn: Tag(text: "Pressure", color: .orange)
-            case .crit: Tag(text: "Critical", color: .red)
+        if let g = s.growth {
+            VStack(alignment: .leading, spacing: 4) {
+                Caption(text: "Change since \(g.since.formatted(.relative(presentation: .named)))")
+                if g.items.isEmpty {
+                    Text("No measured folder changed by more than 50 MB.").font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(g.items) { i in line(i.deltaKB, i.name, i.detail, emphasis: i.deltaKB > 0) }
+                if let u = g.untrackedKB, abs(u) >= 500 * 1024 {
+                    line(u, "Everything else", "simulators, app data, downloads…", emphasis: false)
+                }
             }
-        } content: {
-            HStack {
-                Text("Swap").foregroundStyle(.secondary)
-                Spacer()
-                Text("\(human(bytes: Int64(s.swapUsed))) of \(human(bytes: Int64(s.swapTotal)))").monospacedDigit()
-            }
-            .font(.callout)
-            Bar(value: s.swapFraction, color: s.swapFraction > 0.8 ? .orange : .accentColor)
-            if s.swapFraction > 0.8 && s.diskLevel != .ok {
-                Text("Swap is nearly full and can't grow on a nearly full disk. Freeing disk space helps memory too.")
-                    .font(.caption).foregroundStyle(.orange)
+        } else if s.sizesMeasuredAt != nil {
+            Text("What grew shows up after a second size check, about 30 minutes after the first.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    func line(_ kb: Int64, _ name: String, _ detail: String?, emphasis: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text((kb > 0 ? "+" : "−") + human(kb: abs(kb)))
+                .monospacedDigit()
+                .foregroundStyle(emphasis ? Color.primary : Color.secondary)
+                .frame(width: 62, alignment: .trailing)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(name)
+                if let detail {
+                    Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                }
             }
         }
+        .font(.caption)
     }
 }
 
-// MARK: - Simulators
-
-struct SimBox: View {
+struct XcodeFold: View {
     @EnvironmentObject var m: Monitor
     let s: Snapshot
 
     var body: some View {
-        let sims = s.sims ?? []
-        Box("Simulators", icon: "iphone") {
-            if !sims.isEmpty {
-                ActionButton(key: "sim-all", title: "Shut down all") {
-                    m.act("sim-all") { Actions.shutdownAllSims() }
-                }
-            }
-        } content: {
-            if sims.isEmpty {
-                Text("None booted").font(.callout).foregroundStyle(.secondary)
-            }
-            ForEach(sims) { sim in
-                Row(icon: "iphone", iconColor: .green, title: sim.name) {
-                    ActionIcon(key: "sim-\(sim.udid)", icon: "power", help: "Shut down") {
-                        let udid = sim.udid
-                        m.act("sim-\(udid)") { Actions.shutdownSim(udid) }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Dev processes
-
-struct ProcessBox: View {
-    @EnvironmentObject var m: Monitor
-    let s: Snapshot
-
-    static let kindName = [
-        "mcp": "MCP server", "lsp": "language server", "devtools": "DevTools service",
-        "compiler": "compiler", "flutter": "flutter run",
-    ]
-
-    var body: some View {
-        let mcp = s.procs.filter { $0.kind == "mcp" }
-        let mcpPids = Set(mcp.map(\.pid))
-        // language servers started by an MCP server are shown as part of it
-        let others = s.procs.filter { $0.kind != "mcp" && !mcpPids.contains($0.ppid) }
-        let stale = s.procs.filter(\.stale)
-        let total = s.procs.reduce(UInt64(0)) { $0 + $1.rssBytes }
-
-        Box("Dev processes", icon: "cpu") {
-            HStack(spacing: 8) {
-                Text("\(s.procs.count) · \(human(bytes: Int64(total)))").font(.caption).foregroundStyle(.secondary)
-                if !stale.isEmpty {
-                    ActionButton(key: "kill-stale", title: "Kill \(stale.count) stale") {
-                        m.act("kill-stale") { Actions.killAll(stale) }
-                    }
-                }
-            }
-        } content: {
-            if s.procs.isEmpty {
-                Text("None running (\(s.config.processes.names.joined(separator: ", ")))")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-            if !mcp.isEmpty {
-                Caption(text: "MCP servers")
-                ForEach(mcp) { p in
-                    let kids = s.procs.filter { $0.ppid == p.pid }
-                    let size = p.rssBytes + kids.reduce(0) { $0 + $1.rssBytes }
-                    Row(icon: "sparkles", title: kids.isEmpty ? "\(p.name) MCP server" : "\(p.name) MCP + language server",
-                        subtitle: "pid \(p.pid) · up \(p.uptime) · \(human(bytes: Int64(size)))",
-                        tags: p.stale ? [("STALE", .orange)] : []) {
-                        ActionIcon(key: "kill-\(p.pid)", icon: "xmark.circle", help: "Kill") {
-                            m.act("kill-\(p.pid)", confirm: .init(
-                                title: "Kill this MCP server?",
-                                message: "The app or agent session that started it loses those tools until it restarts.",
-                                button: "Kill")) { Actions.kill(p, children: kids) }
-                        }
-                    }
-                }
-                if mcp.count > 1 {
-                    let older = Array(mcp.dropLast())
-                    let olderKids = s.procs.filter { p in older.contains { $0.pid == p.ppid } }
-                    ActionButton(key: "kill-old-mcp", title: "Kill all but the newest") {
-                        m.act("kill-old-mcp", confirm: .init(
-                            title: "Kill \(older.count) older MCP servers?",
-                            message: "Their sessions lose those tools until they restart. The newest one is kept.",
-                            button: "Kill")) { Actions.killAll(olderKids + older) }
-                    }
-                }
-            }
-            if !others.isEmpty {
-                if !mcp.isEmpty { Caption(text: "Other").padding(.top, 2) }
-                ForEach(others) { p in
-                    Row(icon: "bolt.horizontal",
-                        title: p.cwd.isEmpty ? p.name : p.cwd.split(separator: "/").suffix(2).joined(separator: "/"),
-                        subtitle: "\(Self.kindName[p.kind] ?? p.kind) · up \(p.uptime) · \(human(bytes: Int64(p.rssBytes)))",
-                        tags: p.stale ? [("STALE", .orange)] : [],
-                        help: "pid \(p.pid) · \(Paths.abbreviate(p.cwd))") {
-                        ActionIcon(key: "kill-\(p.pid)", icon: "xmark.circle", help: "Kill") {
-                            m.act("kill-\(p.pid)") { Actions.kill(p) }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Xcode build caches
-
-struct XcodeBox: View {
-    @EnvironmentObject var m: Monitor
-    let s: Snapshot
-
-    var body: some View {
-        let idleDays = s.config.xcode.idleDays
-        let orphans = s.derived.filter { $0.status == .orphan }
-        let unused = s.derived.filter { $0.status == .orphan || ($0.status == .live && $0.idleDays >= idleDays) }
-        let sum: ([DerivedEntry]) -> Int64 = { $0.reduce(0) { $0 + ($1.sizeKB ?? 0) } }
         let root = s.derivedDataRoot
-
-        Box("Xcode build caches", icon: "hammer") {
-            Text(human(kb: s.derivedTotalKB)).font(.caption).foregroundStyle(.secondary)
-        } content: {
+        Fold("Xcode build caches", icon: "hammer", value: "\(human(kb: s.derivedTotalKB)) · \(s.derived.count)") {
             ForEach(s.derived.sorted { ($0.sizeKB ?? 0) > ($1.sizeKB ?? 0) }) { e in
-                DerivedRow(e: e, idleDays: idleDays, root: root)
-            }
-            if !orphans.isEmpty || unused.count > orphans.count {
-                HStack(spacing: 8) {
-                    if !orphans.isEmpty {
-                        ActionButton(key: "dd-orphan", title: "Clean orphaned · \(human(kb: sum(orphans)))") {
-                            m.act("dd-orphan", confirm: .init(
-                                title: "Delete \(orphans.count) orphaned build caches?",
-                                message: "Their projects are gone. About \(human(kb: sum(orphans))). Protected projects are never touched.",
-                                button: "Delete")) { Actions.deleteDerived(orphans, root: root) }
-                        }
+                let age = e.idleDays == 0 ? "built today" : "built \(e.idleDays)d ago"
+                let tags: [String] = {
+                    switch e.status {
+                    case .orphan: return ["project gone"]
+                    case .new: return ["building"]
+                    case .live: return e.idleDays >= s.config.xcode.idleDays ? ["unused"] : []
+                    case .protected: return []
                     }
-                    if unused.count > orphans.count {
-                        ActionButton(key: "dd-unused", title: "Clean unused \(idleDays)d+ · \(human(kb: sum(unused)))") {
-                            m.act("dd-unused", confirm: .init(
-                                title: "Delete \(unused.count) build caches?",
-                                message: "Orphaned ones plus projects not built for \(idleDays)+ days, about \(human(kb: sum(unused))). Their next build starts from scratch. Protected projects are never touched.",
-                                button: "Delete")) { Actions.deleteDerived(unused, root: root) }
+                }()
+                ItemRow(title: e.title, subtitle: "\(human(kb: e.sizeKB)) · \(age)", tags: tags,
+                        help: e.projectDir.map(Paths.abbreviate) ?? e.name) { hovering in
+                    if e.status == .protected {
+                        Image(systemName: "lock").foregroundStyle(.tertiary).frame(width: 22)
+                            .help("Protected in config.json")
+                    } else {
+                        HoverAction(key: "dd-\(e.name)", icon: "trash", help: "Delete this build cache", visible: hovering) {
+                            m.act("dd-\(e.name)", confirm: .init(
+                                title: "Delete the build cache for \(e.title)?",
+                                message: "\(human(kb: e.sizeKB)). The next build of this project starts from scratch.",
+                                button: "Delete")) { Actions.deleteDerived([e], root: root) }
                         }
                     }
                 }
-                .padding(.top, 2)
             }
             SizesNote(s: s)
-        }
-    }
-}
-
-struct DerivedRow: View {
-    @EnvironmentObject var m: Monitor
-    let e: DerivedEntry
-    let idleDays: Int
-    let root: String
-
-    var body: some View {
-        let age = e.idleDays == 0 ? "built today" : "built \(e.idleDays)d ago"
-        let (icon, color, tags): (String, Color, [(String, Color)]) = {
-            switch e.status {
-            case .protected: return ("lock.fill", .secondary, [("protected", .blue)])
-            case .orphan: return ("trash", .orange, [("project gone", .orange)])
-            case .new: return ("hourglass", .secondary, [("building", .secondary)])
-            case .live: return ("folder", .secondary, e.idleDays >= idleDays ? [("unused", .secondary)] : [])
-            }
-        }()
-        Row(icon: icon, iconColor: color, title: e.title, subtitle: "\(human(kb: e.sizeKB)) · \(age)", tags: tags,
-            help: e.projectDir.map(Paths.abbreviate) ?? e.name) {
-            ActionIcon(key: "dd-\(e.name)", icon: "trash", help: "Delete this build cache") {
-                let extra = e.status == .protected ? " This project is protected: its next build starts from scratch." : ""
-                m.act("dd-\(e.name)", confirm: .init(
-                    title: "Delete the build cache for \(e.title)?",
-                    message: "\(human(kb: e.sizeKB)).\(extra)", button: "Delete")) { Actions.deleteDerived([e], root: root) }
-            }
         }
     }
 }
@@ -568,40 +602,38 @@ struct SizesNote: View {
     let s: Snapshot
 
     var body: some View {
-        HStack {
+        HStack(spacing: 6) {
             if m.measuring {
                 ProgressView().controlSize(.mini)
-                Text("Measuring folder sizes…").font(.caption).foregroundStyle(.secondary)
+                Text("Measuring folder sizes…")
             } else if let t = s.sizesMeasuredAt {
-                Text("Sizes measured \(t.formatted(.relative(presentation: .named)))").font(.caption).foregroundStyle(.secondary)
+                Text("Sizes measured \(t.formatted(.relative(presentation: .named)))")
             }
-            Spacer()
         }
+        .font(.caption).foregroundStyle(.secondary)
+        .padding(.top, 4)
     }
 }
 
-// MARK: - Package caches
-
-struct CachesBox: View {
+struct CachesFold: View {
     @EnvironmentObject var m: Monitor
     let s: Snapshot
 
     var body: some View {
         let total = s.caches.reduce(Int64(0)) { $0 + ($1.sizeKB ?? 0) }
-        Box("Package caches", icon: "shippingbox") {
-            Text(human(kb: total)).font(.caption).foregroundStyle(.secondary)
-        } content: {
+        Fold("Package caches", icon: "shippingbox", value: human(kb: total)) {
             ForEach(s.caches.sorted { ($0.sizeKB ?? 0) > ($1.sizeKB ?? 0) }) { c in
-                Row(icon: "shippingbox", title: c.name,
-                    subtitle: human(kb: c.sizeKB) + (c.note.map { " · " + $0 } ?? ""),
-                    help: Paths.abbreviate(c.path)) {
+                ItemRow(title: c.name, subtitle: human(kb: c.sizeKB) + (c.note.map { " · " + $0 } ?? ""),
+                        help: Paths.abbreviate(c.path)) { hovering in
                     if c.clearable {
-                        ActionButton(key: "cache-\(c.id)", title: "Clear") {
+                        HoverAction(key: "cache-\(c.id)", icon: "trash", help: "Clear", visible: hovering) {
                             m.act("cache-\(c.id)", confirm: .init(
                                 title: "Clear the \(c.name) cache?",
                                 message: "\(human(kb: c.sizeKB)) in \(Paths.abbreviate(c.path)). It refills on the next install.",
                                 button: "Clear")) { Actions.clearCache(c) }
                         }
+                    } else {
+                        Color.clear.frame(width: 22, height: 1)
                     }
                 }
             }
@@ -609,19 +641,127 @@ struct CachesBox: View {
     }
 }
 
+struct ProcessFold: View {
+    @EnvironmentObject var m: Monitor
+    let s: Snapshot
+
+    static let kindName = [
+        "mcp": "MCP server", "lsp": "Language server", "devtools": "DevTools service",
+        "compiler": "Compiler", "flutter": "flutter run",
+    ]
+
+    var body: some View {
+        let mcp = s.procs.filter { $0.kind == "mcp" }
+        let mcpPids = Set(mcp.map(\.pid))
+        let others = s.procs.filter { $0.kind != "mcp" && !mcpPids.contains($0.ppid) }
+        let total = s.procs.reduce(UInt64(0)) { $0 + $1.rssBytes }
+
+        Fold("Dev processes", icon: "cpu", value: "\(s.procs.count) · \(human(bytes: Int64(total)))",
+             attention: s.procs.contains(where: \.stale)) {
+            if s.procs.isEmpty {
+                Text("None running").font(.callout).foregroundStyle(.secondary).padding(.vertical, 4)
+            }
+            ForEach(mcp) { p in
+                let kids = s.procs.filter { $0.ppid == p.pid }
+                let size = p.rssBytes + kids.reduce(0) { $0 + $1.rssBytes }
+                ItemRow(title: kids.isEmpty ? "\(p.name) MCP server" : "\(p.name) MCP + language server",
+                        subtitle: "up \(p.uptime) · \(human(bytes: Int64(size)))",
+                        tags: p.stale ? ["stale"] : [], help: "pid \(p.pid)") { hovering in
+                    HoverAction(key: "kill-\(p.pid)", icon: "xmark.circle", help: "Kill", visible: hovering) {
+                        m.act("kill-\(p.pid)", confirm: .init(
+                            title: "Kill this MCP server?",
+                            message: "The app or agent session that started it loses those tools until it restarts.",
+                            button: "Kill")) { Actions.kill(p, children: kids) }
+                    }
+                }
+            }
+            ForEach(others) { p in
+                ItemRow(title: p.cwd.isEmpty ? p.name : p.cwd.split(separator: "/").suffix(2).joined(separator: "/"),
+                        subtitle: "\(Self.kindName[p.kind] ?? p.kind) · up \(p.uptime) · \(human(bytes: Int64(p.rssBytes)))",
+                        tags: p.stale ? ["stale"] : [], help: "pid \(p.pid) · \(Paths.abbreviate(p.cwd))") { hovering in
+                    HoverAction(key: "kill-\(p.pid)", icon: "xmark.circle", help: "Kill", visible: hovering) {
+                        m.act("kill-\(p.pid)") { Actions.kill(p) }
+                    }
+                }
+            }
+            if mcp.count > 1 {
+                let older = Array(mcp.dropLast())
+                let olderKids = s.procs.filter { p in older.contains { $0.pid == p.ppid } }
+                Button("Kill all MCP servers but the newest") {
+                    m.act("kill-old-mcp", confirm: .init(
+                        title: "Kill \(older.count) older MCP servers?",
+                        message: "Their sessions lose those tools until they restart. The newest one is kept.",
+                        button: "Kill")) { Actions.killAll(olderKids + older) }
+                }
+                .buttonStyle(.link).font(.caption).padding(.top, 4)
+            }
+        }
+    }
+}
+
+struct SimFold: View {
+    @EnvironmentObject var m: Monitor
+    let s: Snapshot
+
+    var body: some View {
+        let sims = s.sims ?? []
+        Fold("Simulators", icon: "iphone", value: sims.isEmpty ? "None running" : "\(sims.count) running") {
+            if sims.isEmpty {
+                Text("None booted").font(.callout).foregroundStyle(.secondary).padding(.vertical, 4)
+            }
+            ForEach(sims) { sim in
+                ItemRow(title: sim.name) { hovering in
+                    HoverAction(key: "sim-\(sim.udid)", icon: "power", help: "Shut down", visible: hovering) {
+                        let udid = sim.udid
+                        m.act("sim-\(udid)") { Actions.shutdownSim(udid) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct MemoryFold: View {
+    let s: Snapshot
+
+    var body: some View {
+        let pressure: String = {
+            switch s.pressureLevel {
+            case .ok: return "Normal"
+            case .warn: return "Under pressure"
+            case .crit: return "Critical"
+            }
+        }()
+        Fold("Memory", icon: "memorychip",
+             value: "swap \(human(bytes: Int64(s.swapUsed))) of \(human(bytes: Int64(s.swapTotal)))",
+             attention: s.pressureLevel != .ok) {
+            HStack {
+                Text("Memory pressure").foregroundStyle(.secondary)
+                Spacer()
+                Text(pressure).foregroundStyle(s.pressureLevel == .ok ? Color.primary : s.pressureLevel.color)
+            }
+            .font(.callout).padding(.vertical, 4)
+            Bar(value: s.swapFraction, color: s.swapFraction > 0.8 ? .orange : .secondary)
+            if s.swapFraction > 0.8 && s.diskLevel != .ok {
+                Text("Swap is nearly full and can't grow on a nearly full disk. Freeing disk space helps memory too.")
+                    .font(.caption).foregroundStyle(.orange).padding(.top, 4)
+            }
+        }
+    }
+}
+
 // MARK: - Custom sections
 
-struct CustomBox: View {
-    @EnvironmentObject var m: Monitor
+struct CustomFold: View {
     let state: SectionState
 
     var body: some View {
         let cfg = state.config
-        Box(cfg.title, icon: cfg.icon ?? "square.grid.2x2") {
-            if let b = state.output?.badge { Tag(text: b.text, color: toneColor(b.tone)) }
-        } content: {
+        let badge = state.output?.badge
+        Fold(cfg.title, icon: cfg.icon ?? "square.grid.2x2", value: state.error != nil ? "Error" : (badge?.text ?? ""),
+             attention: state.error != nil || badge?.tone == "warn" || badge?.tone == "bad") {
             if let e = state.error {
-                Text(e).font(.caption).foregroundStyle(.orange)
+                Text(e).font(.caption).foregroundStyle(.orange).padding(.vertical, 4)
             }
             if let out = state.output {
                 ForEach(out.rows.filter { $0.group == nil }) { CustomRow(cfg: cfg, row: $0) }
@@ -631,6 +771,7 @@ struct CustomBox: View {
                         ForEach(rows) { CustomRow(cfg: cfg, row: $0) }
                     }
                     .font(.callout)
+                    .padding(.vertical, 2)
                 }
             }
         }
@@ -650,41 +791,35 @@ struct CustomRow: View {
 
     var body: some View {
         let key = "section-\(cfg.id)-\(row.id)"
-        let tags = (row.tags ?? []).map { ($0.text, toneColor($0.tone)) }
-        HStack(spacing: 4) {
-            if let path = row.reveal {
-                Button { m.reveal(path) } label: {
-                    Row(icon: row.icon ?? "circle.fill", title: row.title, subtitle: row.subtitle, tags: tags,
-                        help: "Reveal \(path) in Finder") { EmptyView() }
-                        .contentShape(Rectangle())
+        let tags = (row.tags ?? []).map(\.text)
+        ItemRow(title: row.title, subtitle: row.subtitle, tags: tags,
+                help: row.reveal.map { "Click to reveal \($0) in Finder" }) { hovering in
+            HStack(spacing: 6) {
+                if let link = row.link {
+                    Button { m.open(link) } label: { Image(systemName: "arrow.up.right.square") }
+                        .buttonStyle(.borderless).help("Open \(link)")
+                        .opacity(hovering ? 1 : 0)
                 }
-                .buttonStyle(.plain)
-            } else {
-                Row(icon: row.icon ?? "circle.fill", title: row.title, subtitle: row.subtitle, tags: tags) { EmptyView() }
-            }
-            if let link = row.link {
-                Button { m.open(link) } label: { Image(systemName: "arrow.up.right.square") }
-                    .buttonStyle(.borderless).help("Open \(link)")
-            }
-            if m.running.contains(key) {
-                ProgressView().controlSize(.small)
-            } else {
-                if let b = row.button {
-                    Button(b.title) { perform(key, b.title, b.run, b.confirm) }.controlSize(.small)
-                }
-                if let menu = row.menu {
-                    Menu(menu.title) {
+                if m.running.contains(key) {
+                    ProgressView().controlSize(.small).frame(width: 84)
+                } else if let b = row.button {
+                    Button { perform(key, b.title, b.run, b.confirm) } label: { Text(b.title).frame(maxWidth: .infinity) }
+                        .controlSize(.small).frame(width: 84)
+                } else if let menu = row.menu {
+                    Menu {
                         ForEach(menu.items) { item in
                             Button((item.checked == true ? "✓ " : "") + item.title) {
                                 perform(key, item.title, item.run, item.confirm)
                             }
                         }
-                    }
+                    } label: { Text(menu.title) }
                     .menuStyle(.borderlessButton)
                     .fixedSize()
+                    .frame(width: 84, alignment: .trailing)
                 }
             }
         }
+        .onTapGesture { if let path = row.reveal { m.reveal(path) } }
     }
 
     func perform(_ key: String, _ title: String, _ args: [String], _ confirm: String?) {

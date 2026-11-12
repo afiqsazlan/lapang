@@ -73,7 +73,9 @@ func renderPanel(to path: String) async {
         await Task.detached { SizeStore.shared.measure(paths) }.value
         await m.refresh()
     }
-    let root = Panel(scroll: false).environmentObject(m).background(Color(nsColor: .windowBackgroundColor))
+    let root = Panel(scroll: false).environmentObject(m)
+        .environment(\.openFolds, args.contains("--demo") ? ["What grew", "Xcode build caches"] : nil)
+        .background(Color(nsColor: .windowBackgroundColor))
     let view = NSHostingView(rootView: root)
     if args.contains("--light") { view.appearance = NSAppearance(named: .aqua) }
     let size = view.fittingSize
@@ -93,40 +95,53 @@ func renderPanel(to path: String) async {
 struct Panel: View {
     @EnvironmentObject var m: Monitor
     var scroll = true
+    @State private var contentHeight: CGFloat = 320
 
     var body: some View {
         VStack(spacing: 0) {
             if let s = m.snap {
                 if scroll {
-                    ScrollView { content(s) }.frame(height: 640)
+                    // as tall as the content, scrolling only past 640 pt
+                    ScrollView {
+                        content(s).background(GeometryReader { g in
+                            Color.clear.preference(key: HeightKey.self, value: g.size.height)
+                        })
+                    }
+                    .frame(height: min(contentHeight, 640))
+                    .onPreferenceChange(HeightKey.self) { contentHeight = $0 }
                 } else {
                     content(s)
                 }
             } else {
                 ProgressView("Looking around…").padding(40)
             }
-            Divider()
             Footer()
         }
-        .frame(width: 400)
+        .frame(width: 380)
         .onAppear { Task { await m.refresh() } }
     }
 
     func content(_ s: Snapshot) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
             if let e = s.configError {
-                Text(e).font(.caption).foregroundStyle(.orange)
+                Text(e).font(.caption).foregroundStyle(.orange).padding([.horizontal, .top], 14)
             }
-            DiskBox(s: s)
-            MemoryBox(s: s)
-            if s.sims != nil { SimBox(s: s) }
-            if !s.config.processes.names.isEmpty { ProcessBox(s: s) }
-            if !s.derived.isEmpty { XcodeBox(s: s) }
-            if !s.caches.isEmpty { CachesBox(s: s) }
-            ForEach(s.sections) { CustomBox(state: $0) }
+            Header(s: s)
+            ChoresBlock(s: s)
+            GrowthFold(s: s)
+            if !s.derived.isEmpty { XcodeFold(s: s) }
+            if !s.caches.isEmpty { CachesFold(s: s) }
+            if !s.config.processes.names.isEmpty { ProcessFold(s: s) }
+            if s.sims != nil { SimFold(s: s) }
+            ForEach(s.sections) { CustomFold(state: $0) }
+            MemoryFold(s: s)
         }
-        .padding(12)
     }
+}
+
+private struct HeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 struct Footer: View {

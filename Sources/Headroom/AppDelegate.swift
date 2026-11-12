@@ -26,13 +26,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func showWindow() {
         guard let m = Self.monitor else { return }
         if window == nil {
-            let view = NSHostingView(rootView: Panel().environmentObject(m))
-            let w = NSWindow(contentRect: NSRect(origin: .zero, size: view.fittingSize),
-                             styleMask: [.titled, .closable, .miniaturizable],
-                             backing: .buffered, defer: false)
+            // the window follows the panel's height as sections open and close
+            let vc = NSHostingController(rootView: Panel().environmentObject(m))
+            vc.sizingOptions = [.preferredContentSize]
+            let w = NSWindow(contentViewController: vc)
+            w.styleMask = [.titled, .closable, .miniaturizable]
             w.title = "Headroom"
             w.isReleasedWhenClosed = false
-            w.contentView = view
             w.center()
             w.setFrameAutosaveName("HeadroomWindow")
             window = w

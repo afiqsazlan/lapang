@@ -6,7 +6,8 @@ A small macOS menu bar app that keeps an eye on what quietly fills up a develope
 
 The menu bar shows free disk space (`41G`) and adds a warning sign when space is low or filling fast. The label is kept narrow on purpose: on a notched MacBook, menu bar items that don't fit are silently hidden. If that happens anyway, open Headroom from Spotlight or Finder and the same panel appears in a normal window. The panel shows:
 
-- **Disk**: free space, a usage bar, and a chart for 24 hours or 7 days.
+- **Things to clean**: what's worth acting on right now, at the top: build caches whose project is gone or unused for days, stale processes, running simulators. Each has its own button, plus one "Clean all". Everything else folds into a single line until you open it.
+- **Disk**: free space, a usage bar, a sparkline of the last 24 hours, and a full chart (24 hours or 7 days) under "What grew".
 - **Trend**: how fast the disk is filling (a straight-line fit over the last 24 hours, restarting after any cleanup) and when it will reach your warning line, drawn as a dashed projection on the chart. A comparison with the size check from about a day ago shows what grew, e.g. `+4.2 GB Xcode build caches (mostly my-app +3.7 GB)`, with an "everything else" line for growth no measured folder explains. You get a notification when free space drops below your threshold, or when it's on course to within `forecastHours`.
 - **Memory**: memory pressure and swap. macOS can't grow swap on a nearly full disk, so a full disk shows up as memory trouble too.
 - **Simulators**: booted iOS simulators, each with a shut-down button.
