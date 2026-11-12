@@ -1,6 +1,6 @@
 import Foundation
 
-// `headroom <command>`: the panel as text or JSON, plus its actions, for terminals and for
+// `lapang <command>`: the panel as text or JSON, plus its actions, for terminals and for
 // agents (e.g. a Claude Code session driven from your phone). Actions are dry runs that print
 // what they would do unless --yes is given, so an agent can show you first and then confirm.
 
@@ -51,7 +51,7 @@ enum CLI {
             out.append("Nothing to clean.")
         } else {
             let total = chores.reduce(Int64(0)) { $0 + $1.kb }
-            out.append("Things to clean (\(chores.count)\(total > 0 ? ", \(human(kb: total)) of disk" : "")). Run `headroom clean` to review:")
+            out.append("Things to clean (\(chores.count)\(total > 0 ? ", \(human(kb: total)) of disk" : "")). Run `lapang clean` to review:")
             for c in chores { out.append("  - \(c.title): \(c.subtitle)") }
         }
 
@@ -64,7 +64,7 @@ enum CLI {
             let total = s.procs.reduce(UInt64(0)) { $0 + $1.rssBytes }
             var line = "Dev processes: \(s.procs.count) · \(human(bytes: Int64(total)))"
             if mcp.count > 1 {
-                line += " · \(mcp.count) MCP servers; `headroom kill-old-mcp` frees \(human(bytes: Int64(oldMCPBytes(s))))"
+                line += " · \(mcp.count) MCP servers; `lapang kill-old-mcp` frees \(human(bytes: Int64(oldMCPBytes(s))))"
             }
             out.append(line)
         }
@@ -162,7 +162,7 @@ enum CLI {
 
     // MARK: actions
 
-    /// `headroom clean [--only caches,processes,simulators] [--yes]`
+    /// `lapang clean [--only caches,processes,simulators] [--yes]`
     static func clean(_ args: [String]) -> Int32 {
         let s = snapshot()
         var only: Set<String> = ["caches", "processes", "simulators"]
@@ -200,7 +200,7 @@ enum CLI {
         return s.procs.filter { p in older.contains { $0.pid == p.pid || $0.pid == p.ppid } }.reduce(0) { $0 + $1.rssBytes }
     }
 
-    /// `headroom kill-old-mcp [--yes]`: every MCP server but the newest, with its children.
+    /// `lapang kill-old-mcp [--yes]`: every MCP server but the newest, with its children.
     static func killOldMCP(yes: Bool) -> Int32 {
         let s = snapshot()
         let older = Array(s.procs.filter { $0.kind == "mcp" }.dropLast())
@@ -215,10 +215,10 @@ enum CLI {
         return 0
     }
 
-    /// `headroom quit "<app name>" [--yes]`: asks an app from "Memory users" to quit.
+    /// `lapang quit "<app name>" [--yes]`: asks an app from "Memory users" to quit.
     static func quit(_ args: [String]) -> Int32 {
         guard let name = args.first(where: { !$0.hasPrefix("--") }) else {
-            print("Usage: headroom quit \"<app name>\" [--yes]")
+            print("Usage: lapang quit \"<app name>\" [--yes]")
             return 2
         }
         let s = snapshot()
@@ -237,11 +237,11 @@ enum CLI {
 
     static func help() -> Int32 {
         print("""
-        headroom status [--json]       what the menu bar panel shows, as text or JSON
-        headroom clean [--only caches,processes,simulators] [--yes]
+        lapang status [--json]       what the menu bar panel shows, as text or JSON
+        lapang clean [--only caches,processes,simulators] [--yes]
                                        stale processes, orphaned/unused build caches, simulators
-        headroom kill-old-mcp [--yes]  kill every MCP server but the newest (and its language server)
-        headroom quit "<app>" [--yes]  ask an app from "Memory users" to quit
+        lapang kill-old-mcp [--yes]  kill every MCP server but the newest (and its language server)
+        lapang quit "<app>" [--yes]  ask an app from "Memory users" to quit
 
         Actions only print what they would do unless --yes is given.
         """)

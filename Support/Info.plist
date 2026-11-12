@@ -3,15 +3,15 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleIdentifier</key>
-	<string>com.afiqsazlan.headroom</string>
+	<string>com.afiqsazlan.lapang</string>
 	<key>CFBundleName</key>
-	<string>Headroom</string>
+	<string>Lapang</string>
 	<key>CFBundleDisplayName</key>
-	<string>Headroom</string>
+	<string>Lapang</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleExecutable</key>
-	<string>Headroom</string>
+	<string>Lapang</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

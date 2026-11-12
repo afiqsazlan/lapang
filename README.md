@@ -1,12 +1,14 @@
-<p align="center"><img src="docs/icon.png" width="128" alt="Headroom icon"></p>
+<p align="center"><img src="docs/icon.png" width="128" alt="Lapang icon"></p>
 
-<h1 align="center">Headroom</h1>
+<h1 align="center">Lapang</h1>
 
-A small macOS menu bar app that keeps an eye on what quietly fills up a developer's Mac, and lets you clear it in a click.
+A small macOS menu bar app that keeps an eye on what quietly fills up a developer's Mac (build caches, simulators, stray dev processes, swap) and lets you clear it in a click.
 
-<p align="center"><img src="docs/screenshot.png" width="380" alt="The Headroom panel: free disk space with fill rate and forecast, what grew since yesterday, memory, simulators, dev processes, Xcode build caches, package caches and a custom section"></p>
+*Lapang* is Malay for spacious. *Rasa lapang* is the light feeling of having room to breathe again.
 
-The menu bar shows free disk space (`41G`) and adds a warning sign when space is low or filling fast. The label is kept narrow on purpose: on a notched MacBook, menu bar items that don't fit are silently hidden. If that happens anyway, open Headroom from Spotlight or Finder and the same panel appears in a normal window. The panel shows:
+<p align="center"><img src="docs/screenshot.png" width="380" alt="The Lapang panel: free disk space with fill rate and forecast, what grew since yesterday, memory, simulators, dev processes, Xcode build caches, package caches and a custom section"></p>
+
+The menu bar shows free disk space (`41G`) and adds a warning sign when space is low or filling fast. The label is kept narrow on purpose: on a notched MacBook, menu bar items that don't fit are silently hidden. If that happens anyway, open Lapang from Spotlight or Finder and the same panel appears in a normal window. The panel shows:
 
 - **Things to clean**: what's worth acting on right now, at the top: build caches whose project is gone or unused for days, stale processes, running simulators. Each has its own button, plus one "Clean all". Everything else folds into a single line until you open it.
 - **Memory**: in the header next to disk: memory pressure, RAM used, swap, and a 24-hour pressure strip like Activity Monitor's ("under pressure 78% of the last 24 h"). "Memory users" lists the apps using the most memory by footprint, helpers included, with a Quit button for apps and Shut down for simulators.
@@ -25,29 +27,29 @@ Destructive buttons always ask first. Folder sizes are measured in the backgroun
 Requires macOS 14 or later and Xcode (or the Command Line Tools with Swift 5.10+).
 
 ```bash
-git clone https://github.com/afiqsazlan/headroom.git && cd headroom
+git clone https://github.com/afiqsazlan/lapang.git && cd lapang
 ./build.sh
 ```
 
-`build.sh` compiles a release build, installs `Headroom.app` into `~/Applications` and launches it. To have it start at login, tick **Open at login** in the panel's gear menu. Use `./build.sh --no-install` to only build `./build/Headroom.app`.
+`build.sh` compiles a release build, installs `Lapang.app` into `~/Applications` and launches it. To have it start at login, tick **Open at login** in the panel's gear menu. Use `./build.sh --no-install` to only build `./build/Lapang.app`.
 
 ## Command line, and agents
 
-The app binary is also a command. `build.sh` links it as `~/.local/bin/headroom` when that folder exists.
+The app binary is also a command. `build.sh` links it as `~/.local/bin/lapang` when that folder exists.
 
 ```bash
-headroom status          # the panel as text
-headroom status --json   # the same as JSON
-headroom clean           # what would be cleaned; add --yes to do it (--only caches,processes,simulators)
-headroom kill-old-mcp    # every MCP server but the newest; add --yes to do it
-headroom quit "Figma"    # ask an app from Memory users to quit; add --yes to do it
+lapang status          # the panel as text
+lapang status --json   # the same as JSON
+lapang clean           # what would be cleaned; add --yes to do it (--only caches,processes,simulators)
+lapang kill-old-mcp    # every MCP server but the newest; add --yes to do it
+lapang quit "Figma"    # ask an app from Memory users to quit; add --yes to do it
 ```
 
-Actions only print what they would do until you add `--yes`. That makes it safe to hand to a coding agent: a Claude Code session (including one you drive from your phone with Remote Control) can run `headroom status`, tell you what's going on, and run the action once you agree.
+Actions only print what they would do until you add `--yes`. That makes it safe to hand to a coding agent: a Claude Code session (including one you drive from your phone with Remote Control) can run `lapang status`, tell you what's going on, and run the action once you agree.
 
 ## Configuration
 
-Gear menu → **Edit config…** opens `~/.config/headroom/config.json`, creating it if needed. Every key is optional, and changes apply on the next refresh.
+Gear menu → **Edit config…** opens `~/.config/lapang/config.json`, creating it if needed. Every key is optional, and changes apply on the next refresh.
 
 ```json
 {
@@ -60,7 +62,7 @@ Gear menu → **Edit config…** opens `~/.config/headroom/config.json`, creatin
   "processes": { "names": ["dart", "dartvm", "dartaotruntime"] },
   "caches": { "hide": ["pnpm"] },
   "sections": [
-    { "title": "Servers", "icon": "server.rack", "command": "~/.config/headroom/sections/servers.sh" }
+    { "title": "Servers", "icon": "server.rack", "command": "~/.config/lapang/sections/servers.sh" }
   ]
 }
 ```
@@ -98,7 +100,7 @@ A section is any executable. When run with no arguments, it prints JSON:
 - `icon` is any SF Symbol name.
 - `link` adds an open-in-browser button. `reveal` makes the row show that path in Finder when clicked.
 - Rows that share a `group` fold into a disclosure list.
-- `button` and menu `items` run the same executable with their `run` arguments. If `confirm` is set, Headroom asks first and then sets `HEADROOM_CONFIRMED=1`. The first line the script prints is shown in the panel's status line.
+- `button` and menu `items` run the same executable with their `run` arguments. If `confirm` is set, Lapang asks first and then sets `LAPANG_CONFIRMED=1`. The first line the script prints is shown in the panel's status line.
 
 The section runs on every refresh, so keep it fast (well under a second).
 
@@ -106,10 +108,10 @@ The section runs on every refresh, so keep it fast (well under a second).
 
 The app icon is drawn in code: `xcrun swift Support/make-icon.swift` regenerates `Support/AppIcon.icns` and `docs/icon.png`.
 
-`Headroom --render out.png` draws the full panel off-screen with live data and exits. It's useful for checking layout without clicking around the menu bar. Add `--demo` to use built-in sample data, `--light` for the light appearance, and `--open "Simulators,Memory"` to show sections opened. The README screenshot is made with:
+`Lapang --render out.png` draws the full panel off-screen with live data and exits. It's useful for checking layout without clicking around the menu bar. Add `--demo` to use built-in sample data, `--light` for the light appearance, and `--open "Simulators,Memory"` to show sections opened. The README screenshot is made with:
 
 ```bash
-./build.sh --no-install && build/Headroom.app/Contents/MacOS/Headroom --render docs/screenshot.png --demo --light
+./build.sh --no-install && build/Lapang.app/Contents/MacOS/Lapang --render docs/screenshot.png --demo --light
 ```
 
 ## License

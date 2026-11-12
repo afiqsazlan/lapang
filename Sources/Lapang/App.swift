@@ -1,19 +1,19 @@
-// Headroom — a menu bar app that keeps an eye on the things that quietly fill a developer's Mac:
+// Lapang — a menu bar app that keeps an eye on the things that quietly fill a developer's Mac:
 // free disk space (with a 24-hour chart), swap, booted simulators, stray dev processes, Xcode
-// build caches and package caches, plus any custom sections you add in ~/.config/headroom.
+// build caches and package caches, plus any custom sections you add in ~/.config/lapang.
 
 import AppKit
 import ServiceManagement
 import SwiftUI
 
 @main
-struct HeadroomApp: App {
+struct LapangApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var monitor: Monitor
 
     init() {
-        CLI.runIfRequested()  // `headroom status` etc. print and exit before any UI starts
-        // `Headroom --render out.png [--demo] [--light]` draws the full panel off-screen and exits.
+        CLI.runIfRequested()  // `lapang status` etc. print and exit before any UI starts
+        // `Lapang --render out.png [--demo] [--light]` draws the full panel off-screen and exits.
         // --demo uses built-in sample data instead of this Mac's; --light forces the light appearance.
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--render"), i + 1 < args.count {
@@ -180,7 +180,7 @@ struct Footer: View {
                 Button("Re-measure folder sizes") { m.measure() }
                 Button("Show data folder") { m.reveal(Paths.support) }
                 Divider()
-                Button("Quit Headroom") { NSApp.terminate(nil) }
+                Button("Quit Lapang") { NSApp.terminate(nil) }
             } label: {
                 Image(systemName: "gearshape")
             }

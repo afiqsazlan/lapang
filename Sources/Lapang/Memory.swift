@@ -11,7 +11,7 @@ struct MemoryUser: Identifiable {
     let bytes: UInt64
     let processes: Int
     let kind: Kind
-    /// The .app bundle for real apps, so Headroom can ask them to quit.
+    /// The .app bundle for real apps, so Lapang can ask them to quit.
     let bundlePath: String?
     var id: String { name }
 }

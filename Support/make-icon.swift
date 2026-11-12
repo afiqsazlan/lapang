@@ -1,4 +1,4 @@
-// Draws the Headroom icon ("Level": a container filled partway, with an orange dashed line
+// Draws the Lapang icon ("Level": a container filled partway, with an orange dashed line
 // marking the free space above) and writes AppIcon.icns plus a PNG preview.
 //
 //   xcrun swift Support/make-icon.swift

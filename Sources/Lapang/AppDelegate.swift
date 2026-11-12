@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Opening Headroom from Spotlight, Finder or the Dock shows the panel in a normal window.
+/// Opening Lapang from Spotlight, Finder or the Dock shows the panel in a normal window.
 /// On a notched MacBook a full menu bar hides the menu bar item, so this is the way back in.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -17,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Called when Headroom is opened again while it's already running.
+    /// Called when Lapang is opened again while it's already running.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showWindow()
         return false
@@ -31,10 +31,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             vc.sizingOptions = [.preferredContentSize]
             let w = NSWindow(contentViewController: vc)
             w.styleMask = [.titled, .closable, .miniaturizable]
-            w.title = "Headroom"
+            w.title = "Lapang"
             w.isReleasedWhenClosed = false
             w.center()
-            w.setFrameAutosaveName("HeadroomWindow")
+            w.setFrameAutosaveName("LapangWindow")
             window = w
         }
         NSApp.activate(ignoringOtherApps: true)

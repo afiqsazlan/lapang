@@ -68,7 +68,7 @@ final class Monitor: ObservableObject {
                             s.freeGB, -s.trend.ratePerDay, s.config.disk.warnGB, durationText(hours: h))
         } else {
             c.title = s.diskLevel == .crit ? "Disk almost full" : "Disk getting full"
-            c.body = String(format: "%.0f GB free. Open Headroom in the menu bar to clean up.", s.freeGB)
+            c.body = String(format: "%.0f GB free. Open Lapang in the menu bar to clean up.", s.freeGB)
         }
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "disk", content: c, trigger: nil))
     }

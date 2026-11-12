@@ -2,9 +2,9 @@
 import PackageDescription
 
 let package = Package(
-    name: "Headroom",
+    name: "Lapang",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "Headroom", path: "Sources/Headroom"),
+        .executableTarget(name: "Lapang", path: "Sources/Lapang"),
     ]
 )

@@ -1,6 +1,6 @@
 import Foundation
 
-/// `~/.config/headroom/config.json`. Every key is optional; anything missing uses the default.
+/// `~/.config/lapang/config.json`. Every key is optional; anything missing uses the default.
 /// Re-read on every refresh, so edits apply within a minute without restarting.
 struct Config: Decodable {
     var refreshSeconds = 60
@@ -83,7 +83,7 @@ struct Config: Decodable {
     }
     enum CodingKeys: String, CodingKey { case refreshSeconds, disk, xcode, processes, caches, sections }
 
-    static let directory = Paths.home + "/.config/headroom"
+    static let directory = Paths.home + "/.config/lapang"
     static let path = directory + "/config.json"
 
     /// Returns the config and, when the file exists but can't be read, why.
@@ -143,7 +143,7 @@ enum Paths {
     }
 
     static let support: String = {
-        let dir = home + "/Library/Application Support/Headroom"
+        let dir = home + "/Library/Application Support/Lapang"
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         return dir
     }()

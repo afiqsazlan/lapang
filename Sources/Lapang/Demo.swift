@@ -1,6 +1,6 @@
 import Foundation
 
-/// Sample data for `Headroom --render out.png --demo`, used for the README screenshot,
+/// Sample data for `Lapang --render out.png --demo`, used for the README screenshot,
 /// so nothing from the machine it runs on ends up in a published image.
 enum Demo {
     static func snapshot() -> Snapshot {

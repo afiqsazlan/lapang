@@ -37,7 +37,7 @@ struct SectionRow: Decodable, Identifiable {
 struct SectionAction: Decodable {
     let title: String
     let run: [String]
-    /// When set, Headroom asks first; this is the dialog's explanation.
+    /// When set, Lapang asks first; this is the dialog's explanation.
     let confirm: String?
 }
 
@@ -85,7 +85,7 @@ enum Sections {
 
     /// Runs one of a section's actions; returns the first line it printed, for the status line.
     static func perform(_ cfg: SectionConfig, _ args: [String]) -> String? {
-        let r = Shell.run(Paths.expand(cfg.command), args, env: ["HEADROOM_CONFIRMED": "1"])
+        let r = Shell.run(Paths.expand(cfg.command), args, env: ["LAPANG_CONFIRMED": "1"])
         guard let r else { return "Couldn't run \(cfg.title)" }
         let text = r.status == 0 ? r.text : (r.errText.isEmpty ? r.text : r.errText)
         return text.split(separator: "\n").first.map(String.init)
