@@ -93,11 +93,43 @@ lapang quit "Figma"    # ask an app from Memory users to quit; add --yes to do i
 lapang log             # what Lapang did: deleted, killed, shut down, and what it freed
 lapang share today     # a shareable PNG card of what this Mac went through; prints its path
 lapang report          # a diagnostics file to attach to a GitHub issue; prints its path
+lapang mcp             # an MCP server for Claude; see below
 ```
 
 Actions only print what they would do until you add `--yes`. That makes it safe to hand to a coding agent: a Claude Code session (including one you drive from your phone with Remote Control) can run `lapang status`, tell you what's going on, and run the action once you agree.
 
-Every action that runs, from the panel or the command line, is written to `~/Library/Application Support/Lapang/actions.log`: one JSON line with the time, where it came from, exactly what was acted on (paths, pid, simulator udid, app bundle), the result, and the disk or memory it freed. Entries are kept for 30 days. Read it with `lapang log` (`--json`, `--limit N`) or under **Recent actions** in the gear menu. The log never leaves your Mac.
+Every action that runs, from the panel, the command line or Claude, is written to `~/Library/Application Support/Lapang/actions.log`: one JSON line with the time, where it came from, exactly what was acted on (paths, pid, simulator udid, app bundle), the result, and the disk or memory it freed. Entries are kept for 30 days. Read it with `lapang log` (`--json`, `--limit N`) or under **Recent actions** in the gear menu. The log never leaves your Mac.
+
+## Use it from Claude (MCP)
+
+`lapang mcp` is an [MCP](https://modelcontextprotocol.io) server, so you can ask Claude about your Mac in plain words ("why is my Mac slow?", "what's using my disk?", "clean up what's safe") and have it answer from what Lapang sees. It runs on your Mac and talks to Claude over stdin/stdout. It opens no network port, and nothing leaves your Mac except what Claude reads from the tool results.
+
+The quickest setup is in the gear menu: **Use with Claude → Copy Claude Desktop config** (or **Copy Claude Code command**). It copies the right path for your install. `lapang mcp --config` prints the same config.
+
+**Claude Desktop:** open Settings → Developer → Edit Config, add this to `claude_desktop_config.json` and restart Claude. If the file already has an `mcpServers` section, add the `lapang` entry inside it.
+
+```json
+{
+  "mcpServers": {
+    "lapang": {
+      "command": "/Applications/Lapang.app/Contents/MacOS/Lapang",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+If you installed with Homebrew, `"command": "/opt/homebrew/bin/lapang"` works too (`/usr/local/bin/lapang` on Intel Macs).
+
+**Claude Code:**
+
+```bash
+claude mcp add lapang -- lapang mcp
+```
+
+Tools that only look: `get_mac_health` (everything `lapang status --json` shows), `get_memory`, `get_disk` (free space, what grew, when it fills up), `list_simulators`, `list_ports` and `get_recent_actions`.
+
+Tools that act: `clean_up`, `stop_old_mcp_servers`, `quit_app` and `stop_port`, the same actions as the commands above. They're marked destructive, and like the commands they only describe what they would do. They act only when Claude calls them again with `confirm: true`, and Claude is told to show you the preview and ask first. What they do lands in the action log with the source `mcp`.
 
 ## Share cards
 

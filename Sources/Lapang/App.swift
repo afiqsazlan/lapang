@@ -234,6 +234,14 @@ struct GearMenu: View {
                 Button("Show log in Finder") { m.reveal(ActionLog.file) }
                     .disabled(!FileManager.default.fileExists(atPath: ActionLog.file))
             }
+            Menu("Use with Claude") {
+                Button("Copy Claude Desktop config") {
+                    copy(MCPServer.desktopConfig, "Copied. In Claude Desktop: Settings → Developer → Edit Config, paste, restart Claude.")
+                }
+                Button("Copy Claude Code command") {
+                    copy(MCPServer.claudeCodeCommand, "Copied. Run it in a terminal, then start a new Claude Code session.")
+                }
+            }
             Button("Report an issue…") { m.reportIssue() }
                 .disabled(m.snap == nil)
             Divider()
@@ -251,6 +259,12 @@ struct GearMenu: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+    }
+
+    func copy(_ text: String, _ note: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        m.flash(note)
     }
 
     var mcpToggleTitle: String {

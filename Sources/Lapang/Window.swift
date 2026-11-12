@@ -1038,7 +1038,7 @@ struct ActionRow: View {
                         Text(detail).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                     }
                     if showSource {
-                        Text(head.source == "cli" ? "lapang command" : "menu bar or window").font(.caption).foregroundStyle(.tertiary)
+                        Text(head.source == "cli" ? "lapang command" : head.source == "mcp" ? "Claude" : "menu bar or window").font(.caption).foregroundStyle(.tertiary)
                     }
                     Spacer(minLength: 8)
                     Text(outcome).foregroundStyle(failed ? Color.orange : Color.secondary).monospacedDigit().lineLimit(1)
