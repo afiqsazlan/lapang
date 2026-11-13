@@ -80,12 +80,13 @@ struct SimFold: View {
         let idle = st.devices.filter { !$0.booted && $0.available }
         let largest = Array(idle.filter { $0.bytes >= 100 << 20 }.prefix(3))
         let more = idle.filter { d in !largest.contains { $0.udid == d.udid } }
+        let shutDown = idle + st.unavailable
         if !sims.isEmpty {
-            GroupLabel(text: "Running")
+            GroupLabel(text: "Running", value: human(bytes: st.booted.reduce(0) { $0 + $1.bytes }))
             ForEach(sims) { sim in runningRow(sim, st.device(sim.udid)) }
         }
-        if !largest.isEmpty {
-            GroupLabel(text: "Largest shut down")
+        if !shutDown.isEmpty {
+            GroupLabel(text: "Shut down", value: human(bytes: shutDown.reduce(0) { $0 + $1.bytes }))
             ForEach(largest) { d in
                 ItemRow(title: d.name, subtitle: "\(d.runtime) · booted \(whenText(d.lastBooted))") { hovering in
                     SizeAndAction(bytes: d.bytes) { SimEraseAction(d: d, visible: hovering) }
@@ -93,7 +94,7 @@ struct SimFold: View {
             }
         }
         if !more.isEmpty {
-            ItemRow(title: "+ \(more.count) more device\(more.count == 1 ? "" : "s")",
+            ItemRow(title: largest.isEmpty ? "\(more.count) device\(more.count == 1 ? "" : "s")" : "+ \(more.count) more device\(more.count == 1 ? "" : "s")",
                     subtitle: "\(more.filter { $0.lastBooted == nil }.count) never booted") { _ in
                 SizeAndAction(bytes: more.reduce(0) { $0 + $1.bytes }) { Color.clear.frame(width: 22, height: 1) }
             }
@@ -105,12 +106,18 @@ struct SimFold: View {
             }
         }
         if !st.runtimes.isEmpty {
-            GroupLabel(text: "Runtimes")
+            let dyld = st.dyldKB.map { " + \(human(kb: $0)) dyld" } ?? ""
+            GroupLabel(text: "Runtimes", value: human(bytes: st.runtimesBytes) + dyld)
             ForEach(st.runtimes) { r in
                 ItemRow(title: r.name, subtitle: "+ \(human(kb: r.dyldKB)) dyld · used \(whenText(r.lastUsed))",
                         tags: st.inUse(r) ? ["in use"] : []) { hovering in
                     SizeAndAction(bytes: r.bytes) { RuntimeAction(r: r, st: st, visible: hovering) }
                 }
+            }
+        }
+        if let kb = st.cachesKB, kb >= 50 << 10 {
+            ItemRow(title: "Simulator caches", subtitle: "CoreSimulator/Caches") { _ in
+                SizeAndAction(bytes: kb * 1024) { Color.clear.frame(width: 22, height: 1) }
             }
         }
         Text("Sizes from simctl, APFS clones counted once. The dyld cache is rebuilt by Xcode and needs admin to delete.")
@@ -131,8 +138,17 @@ struct SimFold: View {
 
 private struct GroupLabel: View {
     let text: String
+    var value: String? = nil
     var body: some View {
-        Text(text).font(.caption).foregroundStyle(.tertiary).padding(.top, 6).padding(.bottom, 1)
+        HStack(spacing: 6) {
+            Text(text)
+            Spacer(minLength: 6)
+            if let value {
+                Text(value).monospacedDigit()
+                Color.clear.frame(width: 22, height: 1)
+            }
+        }
+        .font(.caption).foregroundStyle(.tertiary).padding(.top, 6).padding(.bottom, 1)
     }
 }
 
