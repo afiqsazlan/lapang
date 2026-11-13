@@ -80,6 +80,10 @@ struct SimUsage {
     var tool: String?
     /// The Mac app that started the tool: a terminal, an editor, or Claude Code.
     var launcher: String?
+    /// When the tool started, from the kernel's process table.
+    var since: Date?
+    /// A build, install or launch is aimed at it right now; shutting it down would break that.
+    var building = false
 }
 
 struct DevProc: Identifiable {
@@ -230,29 +234,135 @@ enum Engine {
     }
 
     /// Two kinds of process tie a simulator to its work. Apps run as Mac processes from inside the
-    /// simulator's folder. And the tool driving it (`flutter run` streams logs through
-    /// `simctl spawn <udid>`; `xcodebuild` takes `-destination id=<udid>`) names its id in its
-    /// arguments, so walking up from there finds the tool, its folder, and the app that started it.
+    /// simulator's folder. And the tools driving it name it in their arguments: `xcodebuild -destination
+    /// id=<udid>`, `simctl install|launch|spawn <udid>`, `flutter run -d <udid>`. Walking up from a tool
+    /// finds its folder and the app that started it.
+    ///
+    /// A simulator is building while xcodebuild, simctl install/launch or devicectl targets it, or while a
+    /// `flutter run` aimed at it hasn't yet started streaming the app's logs (it does that once the app
+    /// is installed and launched). A build step that names no simulator counts when one of its parents does.
     static func attachUsage(_ sims: inout [Sim]) {
         guard !sims.isEmpty else { return }
-        let count = proc_listallpids(nil, 0)
-        guard count > 0 else { return }
-        var pids = [pid_t](repeating: 0, count: Int(count) + 64)
-        let n = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
-        for pid in pids.prefix(Int(max(n, 0))) where pid > 0 {
+        var drivers: [(pid: pid_t, sim: Int, building: Bool)] = []
+        var flutterRuns: [(pid: pid_t, sims: [Int])] = []
+        var logStreams: [pid_t] = []
+        var untied: [pid_t] = []
+        for pid in allPIDs() {
             guard let path = execPath(pid) else { continue }
-            let exe = (path as NSString).lastPathComponent
-            for i in sims.indices {
-                let udid = sims[i].udid
-                if path.contains("/CoreSimulator/Devices/\(udid)/data/Containers/Bundle/Application/"),
-                   let app = appBundle(path) {
-                    if !sims[i].usage.apps.contains(where: { $0.bundleID == app.bundleID }) { sims[i].usage.apps.append(app) }
-                } else if (exe == "simctl" || exe == "xcodebuild"), sims[i].usage.project == nil,
-                          args(pid).contains(where: { $0.contains(udid) }) {
-                    describeDriver(of: pid, into: &sims[i].usage)
+            if path.contains("/CoreSimulator/Devices/") {
+                for i in sims.indices where path.contains("/CoreSimulator/Devices/\(sims[i].udid)/data/Containers/Bundle/Application/") {
+                    if let app = appBundle(path), !sims[i].usage.apps.contains(where: { $0.bundleID == app.bundleID }) {
+                        sims[i].usage.apps.append(app)
+                    }
                 }
+                continue
+            }
+            switch (path as NSString).lastPathComponent {
+            case "simctl":
+                let a = args(pid)
+                let sub = a.dropFirst().first { !$0.hasPrefix("-") }
+                let hit = a.contains("booted") ? Array(sims.indices) : targets(a, sims)
+                if sub == "spawn", a.contains("log") { logStreams.append(pid) }
+                let step = (sub == "install" || sub == "launch") && !a.contains { $0.hasPrefix("--console") }
+                if step && hit.isEmpty { untied.append(pid) }
+                drivers += hit.map { (pid, $0, step) }
+            case "xcodebuild", "devicectl":
+                let hit = targets(args(pid), sims)
+                if hit.isEmpty { untied.append(pid) }
+                drivers += hit.map { (pid, $0, true) }
+            case "dart", "dartvm":
+                let a = args(pid)
+                guard let tools = a.firstIndex(where: { $0.hasSuffix("flutter_tools.snapshot") }),
+                      a[(tools + 1)...].first(where: { !$0.hasPrefix("-") }) == "run" else { continue }
+                let device = flutterDevice(a)
+                let hit = device.map { $0 == "all" ? Array(sims.indices) : named($0, sims) } ?? (sims.count == 1 ? [0] : [])
+                flutterRuns.append((pid, hit))
+            default:
+                break
             }
         }
+        for run in flutterRuns {
+            let streaming = logStreams.contains { isDescendant($0, of: run.pid) }
+            drivers += run.sims.map { (run.pid, $0, !streaming) }
+        }
+        for pid in untied {
+            for i in simsAbove(pid, sims) { drivers.append((pid, i, true)) }
+        }
+        var best: [Int: (rank: Int, usage: SimUsage)] = [:]
+        for d in drivers {
+            var u = SimUsage()
+            describeDriver(of: d.pid, into: &u)
+            u.building = d.building
+            let rank = (d.building ? 2 : 0) + (u.project != nil ? 1 : 0)
+            if rank > best[d.sim]?.rank ?? -1 { best[d.sim] = (rank, u) }
+        }
+        for (i, b) in best {
+            sims[i].usage.project = b.usage.project
+            sims[i].usage.projectGone = b.usage.projectGone
+            sims[i].usage.tool = b.usage.tool
+            sims[i].usage.launcher = b.usage.launcher
+            sims[i].usage.since = b.usage.since
+            sims[i].usage.building = b.usage.building
+        }
+    }
+
+    static func allPIDs() -> [pid_t] {
+        let count = proc_listallpids(nil, 0)
+        guard count > 0 else { return [] }
+        var pids = [pid_t](repeating: 0, count: Int(count) + 64)
+        let n = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+        return pids.prefix(Int(max(n, 0))).filter { $0 > 0 }
+    }
+
+    /// Simulators named in a tool's arguments: by udid anywhere, or by `name=` in an xcodebuild destination.
+    private static func targets(_ a: [String], _ sims: [Sim]) -> [Int] {
+        var hit = sims.indices.filter { i in a.contains { $0.contains(sims[i].udid) } }
+        if hit.isEmpty, let d = a.firstIndex(of: "-destination"), d + 1 < a.count,
+           let name = a[d + 1].split(separator: ",").first(where: { $0.hasPrefix("name=") })?.dropFirst(5) {
+            hit = sims.indices.filter { sims[$0].name == name }
+        }
+        return hit
+    }
+
+    /// The `-d` / `--device-id` of a flutter command.
+    static func flutterDevice(_ a: [String]) -> String? {
+        for (i, x) in a.enumerated() {
+            if (x == "-d" || x == "--device-id"), i + 1 < a.count { return a[i + 1] }
+            if x.hasPrefix("--device-id=") { return String(x.dropFirst(12)) }
+        }
+        return nil
+    }
+
+    /// Flutter's matching: an exact id or name, else a prefix of either.
+    private static func named(_ query: String, _ sims: [Sim]) -> [Int] {
+        let q = query.lowercased()
+        let exact = sims.indices.filter { sims[$0].udid.lowercased() == q || sims[$0].name.lowercased() == q }
+        return exact.isEmpty
+            ? sims.indices.filter { sims[$0].udid.lowercased().hasPrefix(q) || sims[$0].name.lowercased().hasPrefix(q) }
+            : exact
+    }
+
+    private static func simsAbove(_ start: pid_t, _ sims: [Sim]) -> [Int] {
+        var pid = start
+        for _ in 0 ..< 8 {
+            guard let parent = parentPID(pid), parent > 1 else { break }
+            pid = parent
+            let a = args(pid)
+            let hit = targets(a, sims)
+            if !hit.isEmpty { return hit }
+            if let d = flutterDevice(a) { return named(d, sims) }
+        }
+        return []
+    }
+
+    private static func isDescendant(_ pid: pid_t, of ancestor: pid_t) -> Bool {
+        var p = pid
+        for _ in 0 ..< 4 {
+            guard let parent = parentPID(p), parent > 1 else { return false }
+            if parent == ancestor { return true }
+            p = parent
+        }
+        return false
     }
 
     private static func appBundle(_ path: String) -> (name: String, bundleID: String)? {
@@ -272,11 +382,13 @@ enum Engine {
             // some links (like the root-owned `login`) hide their path; keep climbing past them
             let path = execPath(pid) ?? ""
             let exe = (path as NSString).lastPathComponent
-            let a = args(pid).joined(separator: " ")
-            if usage.tool == nil {
-                if a.contains("flutter_tools") { usage.tool = "flutter run" }
-                else if exe == "xcodebuild" { usage.tool = "xcodebuild" }
-                if usage.tool != nil, let cwd = currentDir(pid), !cwd.isEmpty {
+            let flutter = (exe == "dart" || exe == "dartvm") && args(pid).contains { $0.hasSuffix("flutter_tools.snapshot") }
+            // flutter run outranks the xcodebuild it starts: its folder is the project, not ios/
+            let tool = flutter ? "flutter run" : exe == "xcodebuild" && usage.tool == nil ? "xcodebuild" : nil
+            if let tool, usage.tool != "flutter run" {
+                usage.tool = tool
+                usage.since = startTime(pid)
+                if let cwd = currentDir(pid), !cwd.isEmpty {
                     usage.project = cwd
                     usage.projectGone = !FileManager.default.fileExists(atPath: cwd)
                 }
@@ -296,12 +408,19 @@ enum Engine {
 
     /// From the kernel's process table, which (unlike proc_pidinfo) also answers for root-owned
     /// processes such as `login` between a terminal and its shell.
-    static func parentPID(_ pid: pid_t) -> pid_t? {
+    static func parentPID(_ pid: pid_t) -> pid_t? { kinfo(pid)?.kp_eproc.e_ppid }
+
+    static func startTime(_ pid: pid_t) -> Date? {
+        guard let t = kinfo(pid)?.kp_proc.p_un.__p_starttime, t.tv_sec > 0 else { return nil }
+        return Date(timeIntervalSince1970: TimeInterval(t.tv_sec) + TimeInterval(t.tv_usec) / 1_000_000)
+    }
+
+    private static func kinfo(_ pid: pid_t) -> kinfo_proc? {
         var k = kinfo_proc()
         var size = MemoryLayout<kinfo_proc>.size
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
         guard sysctl(&mib, 4, &k, &size, nil, 0) == 0, size > 0 else { return nil }
-        return k.kp_eproc.e_ppid
+        return k
     }
 
     // MARK: Processes (via libproc, no ps/lsof)

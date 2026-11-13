@@ -126,7 +126,7 @@ struct SimFold: View {
 
     func runningRow(_ sim: Sim, _ d: SimDevice?) -> some View {
         ItemRow(title: sim.name, subtitle: sim.usage.summary ?? d.map { "\($0.runtime) · no app of yours running" },
-                tags: sim.usage.projectGone ? ["project gone"] : [], help: sim.usage.detail) { hovering in
+                tags: sim.usage.tags, help: sim.usage.detail) { hovering in
             if let d {
                 SizeAndAction(bytes: d.bytes) { SimAction(sim: sim, visible: hovering) }
             } else {
@@ -233,7 +233,7 @@ struct SimulatorsPage: View {
                     let sim = sims.first { $0.udid == d.udid }
                     HStack(spacing: 5) {
                         Text(d.name)
-                        if sim?.usage.projectGone == true { Tag(text: "project gone", color: .secondary) }
+                        ForEach(sim?.usage.tags ?? [], id: \.self) { Tag(text: $0, color: .secondary) }
                     }
                     .help(sim?.usage.detail ?? d.udid)
                 }
@@ -286,9 +286,13 @@ struct SimulatorsPage: View {
                 .frame(height: CGFloat(34 + 26 * st.runtimes.count))
             }
             HStack(spacing: 10) {
-                if sims.count > 1 {
-                    Button("Shut down all \(sims.count)") { m.act("sims") { Actions.shutdownAllSims(sims) } }
-                        .disabled(m.running.contains("sims"))
+                let idle = sims.filter { !$0.usage.building }
+                if idle.count > 1 {
+                    Button(idle.count == sims.count ? "Shut down all \(sims.count)" : "Shut down the other \(idle.count)") {
+                        m.act("sims") { Actions.shutdownAllSims(sims) }
+                    }
+                    .disabled(m.running.contains("sims"))
+                    .help(sims.buildingNote ?? "")
                 }
                 if !st.unavailable.isEmpty {
                     let list = st.unavailable
@@ -315,5 +319,14 @@ private struct Total: View {
             Text(value).font(.system(size: 20, weight: .semibold, design: .rounded)).monospacedDigit()
             if let note { Text(note).font(.caption).foregroundStyle(.tertiary) }
         }
+    }
+}
+
+extension [Sim] {
+    /// "Leaves iPhone 16 Pro running while it builds.", when any is building.
+    var buildingNote: String? {
+        let names = filter(\.usage.building).map(\.name)
+        guard !names.isEmpty else { return nil }
+        return "Leaves \(names.joined(separator: ", ")) running while \(names.count == 1 ? "it builds" : "they build")."
     }
 }

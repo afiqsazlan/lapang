@@ -505,8 +505,11 @@ struct Chore: Identifiable {
 }
 
 extension Snapshot {
+    var chores: [Chore] { chores() }
+
     /// What's worth cleaning right now: orphaned or unused build caches, stale processes, running simulators.
-    var chores: [Chore] {
+    /// Simulators with a build aimed at them are left out unless `includeBuilding`.
+    func chores(includeBuilding: Bool = false) -> [Chore] {
         var out: [Chore] = []
         let idle = config.xcode.idleDays
         for e in derived.sorted(by: { ($0.sizeKB ?? 0) > ($1.sizeKB ?? 0) }) {
@@ -548,7 +551,7 @@ extension Snapshot {
                              help: "Deletes only regenerable, git-ignored folders; the worktrees stay."
                                 + (clones ? " Copy-on-write clones free less than counted." : "")))
         }
-        if let sims, !sims.isEmpty {
+        if let all = sims, case let sims = all.filter({ includeBuilding || !$0.usage.building }), !sims.isEmpty {
             // a simulator still running an app whose folder was deleted is its own chore
             for sim in sims where sim.usage.projectGone {
                 out.append(Chore(id: "sim-\(sim.udid)", icon: "iphone", title: sim.name,
@@ -561,7 +564,8 @@ extension Snapshot {
                                  title: rest.count == 1 ? "1 simulator running" : "\(rest.count) simulators running",
                                  subtitle: rest.map { s in s.usage.projectShort.map { "\(s.name) · \($0)" } ?? s.name }
                                      .joined(separator: ", "),
-                                 button: "Shut down", kind: .simulators(rest), kb: 0))
+                                 button: "Shut down", kind: .simulators(rest), kb: 0,
+                                 help: includeBuilding ? nil : all.buildingNote))
             }
         }
         if let st = simStorage {
@@ -659,7 +663,7 @@ struct ChoresBlock: View {
             m.act(c.id) { Actions.kill(p) }
         case .simulators(let list):
             let all = list.count == (s.sims?.count ?? 0)
-            m.act(c.id) { all ? Actions.shutdownAllSims(list) : list.compactMap(Actions.shutdownSim).first }
+            m.act(c.id) { all ? Actions.shutdownAllSims(list) : list.compactMap { Actions.shutdownSim($0) }.first }
         case .port(let l):
             m.act(c.id, confirm: PortActions.confirm(l)) { PortActions.stop(l) }
         case .worktrees(let list):
@@ -1274,8 +1278,13 @@ struct SimAction: View {
     var visible = true
 
     var body: some View {
-        HoverAction(key: "sim-\(sim.udid)", icon: "power", help: "Shut down", visible: visible) {
-            m.act("sim-\(sim.udid)") { Actions.shutdownSim(sim) }
+        if sim.usage.building {
+            Image(systemName: "lock").foregroundStyle(.tertiary).frame(width: 22)
+                .help("Building; shutting it down now would break the build")
+        } else {
+            HoverAction(key: "sim-\(sim.udid)", icon: "power", help: "Shut down", visible: visible) {
+                m.act("sim-\(sim.udid)") { Actions.shutdownSim(sim) }
+            }
         }
     }
 }
@@ -1310,11 +1319,15 @@ struct MemoryUserAction: View {
 
     var body: some View {
         switch u.kind {
-        case .simulators where !(s.sims ?? []).isEmpty:
-            HoverAction(key: "mem-sims", icon: "power", help: "Shut down all simulators", visible: visible) {
-                let sims = s.sims ?? []
+        case .simulators where !(s.sims ?? []).contains(where: { !$0.usage.building }):
+            let sims = s.sims ?? []
+            HoverAction(key: "mem-sims", icon: "power",
+                        help: sims.buildingNote.map { "Shut down the others. \($0)" } ?? "Shut down all simulators", visible: visible) {
                 m.act("mem-sims") { Actions.shutdownAllSims(sims) }
             }
+        case .simulators where !(s.sims ?? []).isEmpty:
+            Image(systemName: "lock").foregroundStyle(.tertiary).frame(width: 22)
+                .help((s.sims ?? []).buildingNote ?? "")
         case .app where u.bundlePath.map(MemoryActions.isQuittable) == true:
             let bundle = u.bundlePath!
             HoverAction(key: "quit-\(u.name)", icon: "xmark.circle", help: "Quit \(u.name)", visible: visible) {
@@ -1410,14 +1423,21 @@ struct CustomRow: View {
 }
 
 extension SimUsage {
+    var tags: [String] { (building ? ["building"] : []) + (projectGone ? ["project gone"] : []) }
+
     /// "m4-review/carer-app-v2": the last two folders, which tell worktrees apart.
     var projectShort: String? { project.map { $0.split(separator: "/").suffix(2).joined(separator: "/") } }
 
-    /// One line for the row: app · project · launcher.
+    /// One line for the row: app · project · launcher, or "Building project · 4 min · via launcher".
     var summary: String? {
         var parts: [String] = []
-        if !apps.isEmpty { parts.append(apps.map(\.name).joined(separator: ", ")) }
-        if let p = projectShort { parts.append(p) }
+        if building {
+            parts.append("Building " + (projectShort ?? tool ?? "an app"))
+            if let since { parts.append(durationText(since)) }
+        } else {
+            if !apps.isEmpty { parts.append(apps.map(\.name).joined(separator: ", ")) }
+            if let p = projectShort { parts.append(p) }
+        }
         if let l = launcher { parts.append("via " + l) }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
@@ -1425,9 +1445,23 @@ extension SimUsage {
     /// The full story, for the hover tooltip.
     var detail: String {
         var lines: [String] = []
+        if building { lines.append("A build or install is running for it; shutting it down would break that.") }
         for a in apps { lines.append("\(a.name) (\(a.bundleID))") }
-        if let p = project { lines.append("\(tool ?? "Started") in \(Paths.abbreviate(p))\(projectGone ? " (folder deleted)" : "")") }
+        if let p = project {
+            lines.append("\(tool ?? "Started") in \(Paths.abbreviate(p))\(projectGone ? " (folder deleted)" : "")"
+                + (since.map { " · \(durationText($0))" } ?? ""))
+        }
         if let l = launcher { lines.append("Launched from \(l)") }
         return lines.isEmpty ? "No app of yours is running here" : lines.joined(separator: "\n")
     }
+}
+
+/// Time since a process started: "under a minute", "4 min", "1 h 20 min", "5 h", "3 d".
+func durationText(_ since: Date) -> String {
+    let s = Int(Date().timeIntervalSince(since))
+    if s < 60 { return "under a minute" }
+    if s < 3600 { return "\(s / 60) min" }
+    if s < 3 * 3600 { return s % 3600 < 60 ? "\(s / 3600) h" : "\(s / 3600) h \(s % 3600 / 60) min" }
+    if s < 86400 { return "\(s / 3600) h" }
+    return "\(s / 86400) d"
 }

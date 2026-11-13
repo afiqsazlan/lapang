@@ -129,6 +129,9 @@ enum Demo {
                 Sim(udid: "B", name: "iPad Air 13-inch (M2)", usage: SimUsage(
                     apps: [("Weather", "com.example.weather")], project: home + "/code/weather",
                     tool: "xcodebuild", launcher: "Xcode")),
+                Sim(udid: "D", name: "iPhone 17", usage: SimUsage(
+                    project: home + "/code/worktrees/onboarding/shop", tool: "flutter run", launcher: "Terminal",
+                    since: Date().addingTimeInterval(-260), building: true)),
             ],
             procs: procs,
             derivedDataRoot: root, derived: derived, caches: caches,
@@ -163,7 +166,7 @@ enum Demo {
             dev("A", "iPhone 16 Pro", "18-4", "Booted", gb: 6.4, booted: day(0.1)),
             dev("B", "iPad Air 13-inch (M2)", "18-4", "Booted", gb: 3.1, booted: day(0.2)),
             dev("C", "iPhone 15", "18-4", gb: 4.8, booted: day(6)),
-            dev("D", "iPhone 17", "26-1", gb: 2.2, booted: day(1)),
+            dev("D", "iPhone 17", "26-1", "Booted", gb: 2.2, booted: day(0.01)),
             dev("E", "iPhone SE (3rd generation)", "17-5", gb: 1.1, booted: day(150)),
             dev("F", "iPhone 14", "16-4", gb: 0.7, booted: day(400), error: "runtime profile not found"),
             dev("G", "iPad (10th generation)", "16-4", gb: 0.2, booted: day(420), error: "runtime profile not found"),

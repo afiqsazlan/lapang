@@ -56,6 +56,7 @@ extension Snapshot {
                                value: "\(sims.count)",
                                attention: sims.contains { $0.usage.projectGone } || !(simStorage?.unavailable.isEmpty ?? true),
                                subtitle: (sims.isEmpty ? "None booted" : "\(sims.count) running")
+                                   + (sims.contains(where: \.usage.building) ? " · \(sims.filter(\.usage.building).count) building" : "")
                                    + (simStorage.map { " · \(human(bytes: $0.totalBytes)) in all" } ?? ""),
                                scrolls: false) { AnyView(SimulatorsPage(s: self)) })
         }

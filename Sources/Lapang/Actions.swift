@@ -4,17 +4,38 @@ import Foundation
 /// Built-in actions. Each returns a short message for the panel's status line, and records
 /// what it did in the action log, one entry per item acted on.
 enum Actions {
-    static func shutdownSim(_ sim: Sim) -> String? {
+    /// Checks again just before acting: a build may have started since the panel last refreshed.
+    static func shutdownSim(_ sim: Sim, force: Bool = false) -> String? {
+        if !force, building([sim]).contains(sim.udid) {
+            log("shut down simulator", sim, "skipped: building")
+            return "\(sim.name) is building, left running"
+        }
         let r = Shell.run("/usr/bin/xcrun", ["simctl", "shutdown", sim.udid])
         let error = r?.status == 0 ? nil : "Couldn't shut down the simulator"
         log("shut down simulator", sim, simctlError(r))
         return error
     }
 
+    /// `simctl shutdown all`, or one by one around any simulator that is building.
     static func shutdownAllSims(_ sims: [Sim]) -> String? {
+        let busy = building(sims)
+        if !busy.isEmpty {
+            let others = sims.filter { !busy.contains($0.udid) }
+            for sim in sims where busy.contains(sim.udid) { log("shut down all simulators", sim, "skipped: building") }
+            let failed = others.compactMap { shutdownSim($0, force: true) }.count
+            let kept = sims.filter { busy.contains($0.udid) }.map(\.name).joined(separator: ", ")
+            return failed > 0 ? "Couldn't shut down \(failed) simulator\(failed == 1 ? "" : "s")"
+                : "Shut down \(others.count), left \(kept) building"
+        }
         let r = Shell.run("/usr/bin/xcrun", ["simctl", "shutdown", "all"])
         for sim in sims { log("shut down all simulators", sim, simctlError(r)) }
         return r?.status == 0 ? "All simulators shut down" : "Couldn't shut down simulators"
+    }
+
+    private static func building(_ sims: [Sim]) -> Set<String> {
+        var fresh = sims.map { Sim(udid: $0.udid, name: $0.name) }
+        Engine.attachUsage(&fresh)
+        return Set(fresh.filter(\.usage.building).map(\.udid))
     }
 
     private static func simctlError(_ r: Shell.Result?) -> String? {

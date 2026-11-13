@@ -85,6 +85,7 @@ The app binary is also a command. `build.sh` links it as `~/.local/bin/lapang` w
 lapang status          # the panel as text
 lapang status --json   # the same as JSON
 lapang clean           # what would be cleaned; add --yes to do it (--only caches,processes,simulators,ports,worktrees)
+                       # simulators with a build or install running are left alone unless --include-building
 lapang sims            # disk use per simulator device, runtime and dyld cache (--json, --all)
 lapang sims erase <udid>          # erase a shut-down simulator; add --yes to do it
 lapang sims delete-runtime 17.2   # delete a runtime nothing booted uses; add --yes to do it

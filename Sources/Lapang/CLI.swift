@@ -89,7 +89,8 @@ enum CLI {
         if let sims = s.sims, !sims.isEmpty {
             out.append("Simulators:")
             for sim in sims {
-                out.append("  - \(sim.name): \(sim.usage.summary ?? "no app of yours running")\(sim.usage.projectGone ? " (project deleted)" : "")")
+                out.append("  - \(sim.name): \(sim.usage.summary ?? "no app of yours running")\(sim.usage.projectGone ? " (project deleted)" : "")"
+                    + (sim.usage.building ? " (don't shut it down)" : ""))
             }
         }
         if let st = s.simStorage {
@@ -178,7 +179,9 @@ enum CLI {
             "simulators": (s.sims ?? []).map { [
                 "name": $0.name, "udid": $0.udid, "apps": $0.usage.apps.map(\.name),
                 "project": opt($0.usage.project), "projectGone": $0.usage.projectGone,
-                "tool": opt($0.usage.tool), "launcher": opt($0.usage.launcher),
+                "tool": opt($0.usage.tool), "launcher": opt($0.usage.launcher), "building": $0.usage.building,
+                "toolStartedAt": opt($0.usage.since.map { ISO8601DateFormatter().string(from: $0) }),
+                "toolUptimeMinutes": opt($0.usage.since.map { Int(Date().timeIntervalSince($0) / 60) }),
             ] },
             "simulatorStorage": opt(s.simStorage.map(simJSON)),
             "processes": s.procs.map { [
@@ -206,14 +209,15 @@ enum CLI {
 
     // MARK: actions
 
-    /// `lapang clean [--only caches,processes,simulators,worktrees] [--yes]`
+    /// `lapang clean [--only caches,processes,simulators,worktrees] [--include-building] [--yes]`
     static func clean(_ args: [String]) -> Int32 {
         let s = snapshot()
+        let force = args.contains("--include-building")
         var only: Set<String> = ["caches", "processes", "simulators", "ports", "worktrees"]
         if let i = args.firstIndex(of: "--only"), i + 1 < args.count {
             only = Set(args[i + 1].split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) })
         }
-        let chores = s.chores.filter {
+        let chores = s.chores(includeBuilding: force).filter {
             switch $0.kind {
             case .cache: return only.contains("caches")
             case .process: return only.contains("processes")
@@ -227,7 +231,15 @@ enum CLI {
         let runtimes = s.chores.compactMap { c -> SimRuntime? in if case .simRuntime(let r, _) = c.kind { return r }; return nil }
         let runtimeHint = runtimes.isEmpty ? nil
             : "Unused simulator runtimes (\(runtimes.map { "\($0.name) \(human(bytes: $0.bytes))" }.joined(separator: ", "))) are left to `lapang sims delete-runtime <version>`."
-        defer { if let runtimeHint { print(runtimeHint) } }
+        let busy = (s.sims ?? []).filter(\.usage.building)
+        let buildingHint = force || busy.isEmpty || !only.contains("simulators") ? nil
+            : "Left running, a build is aimed at \(busy.count == 1 ? "it" : "them"): "
+                + busy.map { "\($0.name) (\($0.usage.summary ?? "building"))" }.joined(separator: ", ")
+                + ". --include-building shuts \(busy.count == 1 ? "it" : "them") down anyway, which breaks the build."
+        defer {
+            if let buildingHint { print(buildingHint) }
+            if let runtimeHint { print(runtimeHint) }
+        }
         guard !chores.isEmpty else { print("Nothing to clean."); return 0 }
         guard args.contains("--yes") else {
             print("Would clean (run again with --yes to do it):")
@@ -242,7 +254,7 @@ enum CLI {
                 case .process(let p): result = Actions.kill(p) ?? "Killed \(p.name) (pid \(p.pid))"
                 case .port(let l): result = PortActions.stop(l)
                 case .worktrees(let list): result = WorktreeActions.cleanOutput(list)
-                case .simulators(let list): result = list.compactMap(Actions.shutdownSim).first ?? "Shut down \(list.map(\.name).joined(separator: ", "))"
+                case .simulators(let list): result = list.compactMap { Actions.shutdownSim($0, force: force) }.first ?? "Shut down \(list.map(\.name).joined(separator: ", "))"
                 case .simUnavailable: result = SimActions.deleteUnavailable()
                 case .simRuntime: result = nil
                 }
@@ -479,8 +491,8 @@ enum CLI {
     static func help() -> Int32 {
         print("""
         lapang status [--json]       what the menu bar panel shows, as text or JSON
-        lapang clean [--only caches,processes,simulators,ports,worktrees] [--yes]
-                                       stale processes, orphaned/unused build caches, simulators,
+        lapang clean [--only caches,processes,simulators,ports,worktrees] [--include-building] [--yes]
+                                       stale processes, orphaned/unused build caches, simulators (not mid-build),
                                        servers from deleted folders, build output of merged, idle worktrees
         lapang kill-old-mcp [--yes]  kill every MCP server but the newest (and its language server)
         lapang kill-old-mcp --idle [--hours N] [--keep N] [--yes]

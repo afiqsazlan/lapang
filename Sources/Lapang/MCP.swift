@@ -224,8 +224,9 @@ enum MCPServer {
         Tool(name: "list_simulators", title: "Running simulators",
              description: """
              The iPhone, iPad and other simulators that are switched on, which of your apps each is running, \
-             and whether the project behind it still exists. Running simulators use a lot of memory; \
-             clean_up can shut down ones nobody is using.
+             and whether the project behind it still exists. building: true means an app is being built or \
+             installed on it right now: never suggest shutting that one down. Running simulators use a lot \
+             of memory; clean_up can shut down ones nobody is using.
              """) { _ in
             let s = CLI.snapshot()
             guard s.sims != nil else { return ("Xcode's simulator tools aren't installed on this Mac.", false) }
@@ -260,16 +261,25 @@ enum MCPServer {
              Frees disk space and memory by removing what Lapang lists as safe to clean: Xcode build caches \
              of deleted or long-unused projects, developer tools left running after their window closed, \
              simulators nobody is using, servers running from deleted folders, and build output of finished \
-             work. It never touches documents, photos or app data. Without confirm it only lists what it \
-             would do. Show that list to the person and ask before calling again with confirm: true.
+             work. It never touches documents, photos or app data, and leaves alone simulators that an app is \
+             being built or installed on. Without confirm it only lists what it would do. Show that list to \
+             the person and ask before calling again with confirm: true.
              """,
-             properties: ["only": [
-                "type": "array", "items": ["type": "string", "enum": ["caches", "processes", "simulators", "ports", "worktrees"]],
-                "description": "Limit the cleanup to some kinds. Leave out to include everything.",
-             ]],
+             properties: [
+                "only": [
+                    "type": "array", "items": ["type": "string", "enum": ["caches", "processes", "simulators", "ports", "worktrees"]],
+                    "description": "Limit the cleanup to some kinds. Leave out to include everything.",
+                ],
+                "include_building": [
+                    "type": "boolean", "default": false,
+                    "description": "Also shut down simulators that are building, which breaks those builds. Only when the person asks for exactly that.",
+                ],
+             ],
              acts: true) { args in
             let kinds = (args["only"] as? [String]) ?? []
-            return action("clean_up", args, CLI.clean, kinds.isEmpty ? [] : ["--only", kinds.joined(separator: ",")])
+            let force = (args["include_building"] as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() && $0.boolValue } ?? false
+            return action("clean_up", args, CLI.clean,
+                          (kinds.isEmpty ? [] : ["--only", kinds.joined(separator: ",")]) + (force ? ["--include-building"] : []))
         },
 
         Tool(name: "stop_old_mcp_servers", title: "Stop old AI helper servers",
