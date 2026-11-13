@@ -263,10 +263,10 @@ struct MemoryLine: View {
                     .font(.caption).foregroundStyle(.secondary).lineLimit(2)
             } else {
                 HStack {
-                    Text(historyText).foregroundStyle(.secondary)
+                    Text(historyText).foregroundStyle(.tertiary)
                     Spacer()
-                    Text("swap \(human(bytes: Int64(s.swapUsed))) of \(human(bytes: Int64(s.swapTotal)))")
-                        .foregroundStyle(s.swapFraction > 0.8 ? Color.orange : Color.secondary).monospacedDigit()
+                    Text("swap \(human(bytes: Int64(s.swapUsed)))" + (s.swapDraining ? " · draining" : ""))
+                        .foregroundStyle(.secondary).monospacedDigit()
                 }
                 .font(.caption)
                 if let last = s.memSpikes.last, Date().timeIntervalSince(last.t) <= 2 * 3600 {
@@ -274,16 +274,19 @@ struct MemoryLine: View {
                         .font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 }
             }
-            if s.swapFraction > 0.8 && s.diskLevel != .ok {
+            if s.pressureLevel != .ok && s.diskLevel != .ok {
                 Text("Swap lives on the disk and can't grow while it's this full. Freeing disk space helps memory too.")
                     .font(.caption).foregroundStyle(.orange)
             }
         }
-        .help("Memory pressure is how hard macOS is working to find RAM. Swap is RAM spilled onto the disk.")
+        .help(MemoryLine.help)
         .onAppear {
             if pinLatestSpike, let t = s.memSpikes.last?.t { focus.pinned = PressureStrip.slice(t, now: Date()) }
         }
     }
+
+    static let help = "Memory pressure is how hard macOS is working to find RAM. Swap is RAM spilled onto the disk; "
+        + "it drains slowly after pressure eases, as apps touch what they left there."
 
     var historyText: String {
         guard let share = MemoryHistory.pressuredShare(s.memHistory),

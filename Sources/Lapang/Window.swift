@@ -392,32 +392,32 @@ struct MemoryCard: View {
             HStack {
                 Text("Swap")
                 Spacer()
-                Text("\(human(bytes: Int64(s.swapUsed))) of \(human(bytes: Int64(s.swapTotal)))").monospacedDigit()
+                Text(human(bytes: Int64(s.swapUsed)) + (s.swapDraining ? " · draining" : "")).monospacedDigit()
             }
             .font(.caption)
-            .foregroundStyle(s.swapFraction > 0.8 ? Color.orange : Color.secondary)
+            .foregroundStyle(.secondary)
             .padding(.top, 2)
-            MemoryChart(points: s.memHistory, value: \.swapGB, top: Double(s.swapTotal) / 1_073_741_824, height: chartHeight)
-            if s.swapFraction > 0.8 && s.diskLevel != .ok {
+            MemoryChart(points: s.memHistory, value: \.swapGB, top: nil, height: chartHeight)
+            if s.pressureLevel != .ok && s.diskLevel != .ok {
                 Text("Swap lives on the disk and can't grow while it's this full. Freeing disk space helps memory too.")
                     .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
         }
-        .help("Memory pressure is how hard macOS is working to find RAM. Swap is RAM spilled onto the disk.")
+        .help(MemoryLine.help)
     }
 }
 
-/// One memory figure over the last 24 hours, against its ceiling (RAM, or the swap file's size).
+/// One memory figure over the last 24 hours, against its ceiling when it has one (RAM does, swap doesn't).
 struct MemoryChart: View {
     let points: [MemoryPoint]
     let value: KeyPath<MemoryPoint, Double>
-    let top: Double
+    let top: Double?
     var height: CGFloat = 54
 
     var body: some View {
         // a point a minute is more than a chart this size can show
         let shown = points.enumerated().filter { $0.offset % 5 == 0 || $0.offset == points.count - 1 }.map(\.element)
-        let high = max(top, shown.map { $0[keyPath: value] }.max() ?? 0, 1)
+        let high = max(top ?? 0, shown.map { $0[keyPath: value] }.max() ?? 0, 1)
         let now = Date()
         Chart {
             ForEach(shown) { p in
@@ -427,7 +427,7 @@ struct MemoryChart: View {
                     .foregroundStyle(Color.secondary)
                     .lineStyle(StrokeStyle(lineWidth: 1.3))
             }
-            if top > 0 {
+            if let top, top > 0 {
                 RuleMark(y: .value("Max", top))
                     .foregroundStyle(Color.secondary.opacity(0.5))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 3]))
@@ -441,7 +441,7 @@ struct MemoryChart: View {
             }
         }
         .chartYAxis {
-            AxisMarks(position: .trailing, values: [0, top]) { v in
+            AxisMarks(position: .trailing, values: [0, top ?? high]) { v in
                 AxisGridLine()
                 AxisValueLabel { if let g = v.as(Double.self) { Text("\(Int(g.rounded()))G") } }
             }

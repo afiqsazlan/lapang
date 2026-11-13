@@ -182,7 +182,8 @@ enum MCPServer {
              How hard this Mac's memory is working right now (pressure "ok", "warn" or "crit"), \
              how much swap (memory spilled onto the disk) is in use, how much of the last day was spent \
              under pressure, which apps use the most memory, and recent pressure spikes with the apps that \
-             grew when each began (culprits). Use it when the Mac feels slow, apps are beachballing, or \
+             grew when each began (culprits). swapDraining means pressure is back to normal and the swap \
+             left over from earlier clears as apps touch it, so the Mac has recovered. Use it when the Mac feels slow, apps are beachballing, or \
              someone asks what slowed it down earlier. Apps marked canQuit can be closed with quit_app.
              """) { _ in
             let s = CLI.snapshot()
@@ -346,13 +347,14 @@ enum MCPServer {
     }
 
     static func memorySummary(_ s: Snapshot) -> String {
-        let pressure = ["normal", "normal", "under pressure", "under pressure", "critical"][min(max(s.pressure, 0), 4)]
-        var line = "Memory is \(pressure)"
+        var line = "Memory is \(s.pressureText.lowercased())" + String(format: ", %.1f of %.0f GB used, swap %@",
+            Double(s.memUsed) / 1_073_741_824, Double(s.memTotal) / 1_073_741_824, human(bytes: Int64(s.swapUsed)))
+        if s.swapDraining { line += " (left over from earlier pressure, draining)" }
+        line += "."
         if let share = MemoryHistory.pressuredShare(s.memHistory) {
-            line += " (under pressure \(Int((share * 100).rounded()))% of \(CLI.windowText(s.memHistory.first?.t)))"
+            line += " Under pressure \(Int((share * 100).rounded()))% of \(CLI.windowText(s.memHistory.first?.t))."
         }
-        return line + String(format: ", %.1f of %.0f GB used, swap %@.", Double(s.memUsed) / 1_073_741_824,
-                             Double(s.memTotal) / 1_073_741_824, human(bytes: Int64(s.swapUsed)))
+        return line
     }
 
     // MARK: setup snippets, for the README and the gear menu

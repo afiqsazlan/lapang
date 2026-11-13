@@ -46,13 +46,13 @@ enum CLI {
         }
         var out: [String] = []
         out.append(String(format: "Disk     %.0f GB free of %.0f GB · %@", s.freeGB, s.totalGB, trendText(s)))
-        let pressure = ["Normal", "Normal", "Under pressure", "Under pressure", "Critical"][min(max(s.pressure, 0), 4)]
-        var mem = "Memory   \(pressure)"
+        var mem = "Memory   \(s.pressureText)"
+        mem += String(format: " · %.1f of %.0f GB used · swap %@", Double(s.memUsed) / 1_073_741_824,
+                      Double(s.memTotal) / 1_073_741_824, human(bytes: Int64(s.swapUsed)))
+        if s.swapDraining { mem += " (draining)" }
         if let share = MemoryHistory.pressuredShare(s.memHistory) {
-            mem += " (\(Int((share * 100).rounded()))% of \(windowText(s.memHistory.first?.t)))"
+            mem += " · under pressure \(Int((share * 100).rounded()))% of \(windowText(s.memHistory.first?.t))"
         }
-        mem += String(format: " · %.1f of %.0f GB used · swap %@ of %@", Double(s.memUsed) / 1_073_741_824,
-                      Double(s.memTotal) / 1_073_741_824, human(bytes: Int64(s.swapUsed)), human(bytes: Int64(s.swapTotal)))
         out.append(mem)
         if let last = s.memSpikes.last, Date().timeIntervalSince(last.t) <= 86400 {
             out.append("         Last spike \(last.t.formatted(date: .omitted, time: .shortened)) (\(PressureSpikes.label(last))): \(last.summary)")
@@ -165,7 +165,7 @@ enum CLI {
             "memory": [
                 "pressure": "\(s.pressureLevel)", "usedGB": Double(s.memUsed) / 1_073_741_824,
                 "totalGB": Double(s.memTotal) / 1_073_741_824,
-                "swapUsedGB": Double(s.swapUsed) / 1_073_741_824, "swapTotalGB": Double(s.swapTotal) / 1_073_741_824,
+                "swapUsedGB": Double(s.swapUsed) / 1_073_741_824, "swapDraining": s.swapDraining,
                 "pressuredShare24h": opt(MemoryHistory.pressuredShare(s.memHistory)),
                 "users": s.memUsers.map { ["name": $0.name, "bytes": $0.bytes, "processes": $0.processes] },
                 "spikes": s.memSpikes.suffix(20).reversed().map { sp -> [String: Any] in [

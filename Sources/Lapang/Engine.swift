@@ -36,7 +36,9 @@ struct Snapshot {
     var freeGB: Double { Double(freeBytes) / 1_073_741_824 }
     var totalGB: Double { Double(totalBytes) / 1_073_741_824 }
     var usedFraction: Double { totalBytes > 0 ? 1 - Double(freeBytes) / Double(totalBytes) : 0 }
-    var swapFraction: Double { swapTotal > 0 ? Double(swapUsed) / Double(swapTotal) : 0 }
+    /// Pressure is back to normal but swap is still over a quarter of RAM. macOS leaves pages in
+    /// swap until something touches them, so swap trails the recovery by a while.
+    var swapDraining: Bool { pressureLevel == .ok && swapUsed > memTotal / 4 }
 
     /// The fill rate says free space reaches the warning line soon, though it isn't there yet.
     var forecastWarning: Bool {
