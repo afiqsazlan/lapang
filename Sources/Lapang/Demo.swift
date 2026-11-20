@@ -47,13 +47,13 @@ enum Demo {
 
         let started: (Double) -> Date = { now.addingTimeInterval(-$0 * 60) }
         let procs = [
-            DevProc(pid: 4821, ppid: 4790, name: "dart", kind: "mcp", rssBytes: 60 << 20, started: started(95),
+            DevProc(pid: 4821, ppid: 4790, name: "dart", kind: "mcp", footprintBytes: 60 << 20, started: started(95),
                     cwd: home + "/code", stale: false),
-            DevProc(pid: 4835, ppid: 4821, name: "dart", kind: "lsp", rssBytes: 410 << 20, started: started(95),
+            DevProc(pid: 4835, ppid: 4821, name: "dart", kind: "lsp", footprintBytes: 410 << 20, started: started(95),
                     cwd: home + "/code", stale: false),
-            DevProc(pid: 5120, ppid: 5101, name: "dartaotruntime", kind: "compiler", rssBytes: 380 << 20, started: started(42),
+            DevProc(pid: 5120, ppid: 5101, name: "dartaotruntime", kind: "compiler", footprintBytes: 380 << 20, started: started(42),
                     cwd: home + "/code/worktrees/checkout-redesign/shop", stale: false),
-            DevProc(pid: 3377, ppid: 1, name: "dart", kind: "devtools", rssBytes: 95 << 20, started: started(1460),
+            DevProc(pid: 3377, ppid: 1, name: "dart", kind: "devtools", footprintBytes: 95 << 20, started: started(1460),
                     cwd: home + "/code/worktrees/old-onboarding/shop", stale: true),
         ]
 
@@ -152,6 +152,44 @@ enum Demo {
         snap.ports = ports
         snap.simStorage = simStorage(now)
         return snap
+    }
+
+    /// `--demo --thrash`: swap nearly full and the disk busy paging, Spotlight indexing code folders,
+    /// a fan-out of MCP servers with an orphaned language server, a crash-looping service and its log.
+    static func addThrash(_ snap: inout Snapshot) {
+        let now = Date()
+        let home = "/Users/me"
+        let page = Double(vm_kernel_page_size)
+        func pager(_ pid: Int32, _ name: String, _ mbps: Double) -> Pager {
+            Pager(pid: pid, name: name, pageins: UInt64(mbps * 1_048_576 / page), seconds: 1)
+        }
+        snap.pressure = 1
+        snap.swapUsed = 7_600 << 20
+        snap.swapTotal = 8_192 << 20
+        snap.paging = Paging(seconds: 1, pageinsPerSec: 150 * 1_048_576 / page, swapinsPerSec: 34 * 1_048_576 / page,
+                             swapoutsPerSec: 18 * 1_048_576 / page, readOpsPerSec: 5_300, writeOpsPerSec: 900,
+                             readBytesPerSec: 196 * 1_048_576, writeBytesPerSec: 31 * 1_048_576,
+                             swapFullShare: 0.93, swapNearlyFull: true, heavy: true,
+                             topPagers: [pager(412, "mds_stores", 71), pager(4821, "Dart and Flutter", 48), pager(2210, "Xcode", 19)])
+        snap.mcpGroups = [
+            MCPGroup(command: "dart mcp-server", pids: [4821, 5230, 5544, 6012, 6390, 6801], bytes: 10_750 << 20, processes: 14, orphaned: 2),
+            MCPGroup(command: "node @playwright/mcp", pids: [5301, 6120, 6655], bytes: 640 << 20, processes: 6, orphaned: 0),
+            MCPGroup(command: "github-mcp-server", pids: [5310, 6131], bytes: 48 << 20, processes: 2, orphaned: 0),
+        ]
+        var orphan = DevProc(pid: 3901, ppid: 1, name: "dart", kind: "lsp", footprintBytes: 2_150 << 20,
+                             started: now.addingTimeInterval(-26 * 3600), cwd: home + "/code/worktrees/old-onboarding/shop", stale: true)
+        orphan.orphaned = true
+        snap.procs.append(orphan)
+        snap.spotlight = SpotlightReport(folders: [
+            IndexedFolder(path: home + "/code/worktrees", kb: Int64(18.1 * 1_048_576), items: 149_428),
+            IndexedFolder(path: home + "/code/shop", kb: Int64(6.0 * 1_048_576), items: 46_029),
+            IndexedFolder(path: home + "/code/web", kb: Int64(2.6 * 1_048_576), items: 10_677),
+        ], measuredAt: now.addingTimeInterval(-40 * 60))
+        let log = "/opt/homebrew/var/log/php-fpm.log"
+        snap.crashLoops = [CrashLoop(label: "homebrew.mxcl.php@8.3", plist: home + "/Library/LaunchAgents/homebrew.mxcl.php@8.3.plist",
+                                     lastExit: 78, runs: 412, runsPerHour: 40, program: "/opt/homebrew/opt/php@8.3/sbin/php-fpm",
+                                     logs: [log])]
+        snap.runawayLogs = [RunawayLog(path: log, bytes: 1_400 << 20, mbPerDay: 230, estimated: false, agent: "homebrew.mxcl.php@8.3")]
     }
 
     static func simStorage(_ now: Date) -> SimStorage {

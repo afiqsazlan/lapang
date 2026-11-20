@@ -13,6 +13,51 @@ struct Config: Decodable {
     var worktrees = Worktrees()
     var sections: [SectionConfig] = []
     var share = Share()
+    var spotlight = SpotlightRoots()
+    var launchAgents = LaunchAgentRules()
+    var logs = Logs()
+
+    /// Where your code lives, for finding large folders Spotlight indexes. Empty: ~/Developer, ~/Sites,
+    /// ~/Projects, ~/code, ~/src and similar that exist, plus the worktree repos and roots.
+    struct SpotlightRoots: Decodable {
+        var roots: [String] = []
+        /// Folders smaller than this aren't worth excluding.
+        var minGB = 2.0
+
+        init() {}
+        init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: CodingKeys.self)
+            roots = try c.decodeIfPresent([String].self, forKey: .roots) ?? roots
+            minGB = try c.decodeIfPresent(Double.self, forKey: .minGB) ?? minGB
+        }
+        enum CodingKeys: String, CodingKey { case roots, minGB }
+    }
+
+    struct LaunchAgentRules: Decodable {
+        /// Labels never flagged as crash-looping.
+        var ignore: [String] = []
+
+        init() {}
+        init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: CodingKeys.self)
+            ignore = try c.decodeIfPresent([String].self, forKey: .ignore) ?? ignore
+        }
+        enum CodingKeys: String, CodingKey { case ignore }
+    }
+
+    struct Logs: Decodable {
+        /// Folders whose log files are watched for runaway growth. Empty: Homebrew's var/log and ~/Library/Logs.
+        var dirs: [String] = []
+        var growthMBPerDay = 100.0
+
+        init() {}
+        init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: CodingKeys.self)
+            dirs = try c.decodeIfPresent([String].self, forKey: .dirs) ?? dirs
+            growthMBPerDay = try c.decodeIfPresent(Double.self, forKey: .growthMBPerDay) ?? growthMBPerDay
+        }
+        enum CodingKeys: String, CodingKey { case dirs, growthMBPerDay }
+    }
 
     struct Share: Decodable {
         /// A notification on Monday mornings with last week's recap, ready to share.
@@ -51,13 +96,33 @@ struct Config: Decodable {
     struct Memory: Decodable {
         /// A notification when memory pressure turns critical, naming what grew.
         var notify = true
+        var thrash = Thrash()
 
         init() {}
         init(from d: Decoder) throws {
             let c = try d.container(keyedBy: CodingKeys.self)
             notify = try c.decodeIfPresent(Bool.self, forKey: .notify) ?? notify
+            thrash = try c.decodeIfPresent(Thrash.self, forKey: .thrash) ?? thrash
         }
-        enum CodingKeys: String, CodingKey { case notify }
+        enum CodingKeys: String, CodingKey { case notify, thrash }
+    }
+
+    /// Swap thrashing: swap at least `swapFullShare` used, and paging or disk traffic over either limit.
+    struct Thrash: Decodable {
+        var swapFullShare = 0.85
+        /// Page-ins plus swap-ins, in MB a second.
+        var pagingMBps = 64.0
+        /// Disk reads plus writes a second.
+        var diskIOPS = 5000.0
+
+        init() {}
+        init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: CodingKeys.self)
+            swapFullShare = try c.decodeIfPresent(Double.self, forKey: .swapFullShare) ?? swapFullShare
+            pagingMBps = try c.decodeIfPresent(Double.self, forKey: .pagingMBps) ?? pagingMBps
+            diskIOPS = try c.decodeIfPresent(Double.self, forKey: .diskIOPS) ?? diskIOPS
+        }
+        enum CodingKeys: String, CodingKey { case swapFullShare, pagingMBps, diskIOPS }
     }
 
     struct Xcode: Decodable {
@@ -79,14 +144,18 @@ struct Config: Decodable {
         /// Executable names to watch. A watched process is stale when its parent died or its folder is gone.
         var names = ["dart", "dartvm", "dartaotruntime"]
         var mcpCleanup = MCPCleanupRule()
+        /// More helper-server names (beyond language servers, tsserver, gopls…) that count as orphaned
+        /// once their parent is gone.
+        var orphanCommands: [String] = []
 
         init() {}
         init(from d: Decoder) throws {
             let c = try d.container(keyedBy: CodingKeys.self)
             names = try c.decodeIfPresent([String].self, forKey: .names) ?? names
             mcpCleanup = try c.decodeIfPresent(MCPCleanupRule.self, forKey: .mcpCleanup) ?? mcpCleanup
+            orphanCommands = try c.decodeIfPresent([String].self, forKey: .orphanCommands) ?? orphanCommands
         }
-        enum CodingKeys: String, CodingKey { case names, mcpCleanup }
+        enum CodingKeys: String, CodingKey { case names, mcpCleanup, orphanCommands }
     }
 
     /// Stop MCP servers that have been idle this long, keeping the newest few. Off until you turn it on.
@@ -214,8 +283,13 @@ struct Config: Decodable {
         sections = try c.decodeIfPresent([SectionConfig].self, forKey: .sections) ?? sections
         share = try c.decodeIfPresent(Share.self, forKey: .share) ?? share
         memory = try c.decodeIfPresent(Memory.self, forKey: .memory) ?? memory
+        spotlight = try c.decodeIfPresent(SpotlightRoots.self, forKey: .spotlight) ?? spotlight
+        launchAgents = try c.decodeIfPresent(LaunchAgentRules.self, forKey: .launchAgents) ?? launchAgents
+        logs = try c.decodeIfPresent(Logs.self, forKey: .logs) ?? logs
     }
-    enum CodingKeys: String, CodingKey { case refreshSeconds, disk, memory, xcode, processes, caches, ports, worktrees, sections, share }
+    enum CodingKeys: String, CodingKey {
+        case refreshSeconds, disk, memory, xcode, processes, caches, ports, worktrees, sections, share, spotlight, launchAgents, logs
+    }
 
     static let directory = Paths.home + "/.config/lapang"
     static let path = directory + "/config.json"
@@ -234,16 +308,20 @@ struct Config: Decodable {
     {
       "refreshSeconds": 60,
       "disk": { "warnGB": 20, "criticalGB": 10, "notify": true, "forecastHours": 24, "watch": [] },
-      "memory": { "notify": true },
+      "memory": { "notify": true, "thrash": { "swapFullShare": 0.85, "pagingMBps": 64, "diskIOPS": 5000 } },
       "xcode": { "idleDays": 3, "protect": [] },
       "processes": {
         "names": ["dart", "dartvm", "dartaotruntime"],
-        "mcpCleanup": { "enabled": false, "idleHours": 2, "keepNewest": 1 }
+        "mcpCleanup": { "enabled": false, "idleHours": 2, "keepNewest": 1 },
+        "orphanCommands": []
       },
       "caches": { "hide": [] },
       "ports": { "minPort": 1024, "maxPort": 49151, "hide": [], "names": {} },
       "worktrees": { "repos": [], "roots": [], "removeCommand": "git -C {repo} worktree remove {path}" },
       "share": { "weeklyRecap": false },
+      "spotlight": { "roots": [], "minGB": 2 },
+      "launchAgents": { "ignore": [] },
+      "logs": { "dirs": [], "growthMBPerDay": 100 },
       "sections": []
     }
 

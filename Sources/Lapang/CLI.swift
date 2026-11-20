@@ -6,7 +6,7 @@ import Foundation
 // what they would do unless --yes is given, so an agent can show you first and then confirm.
 
 enum CLI {
-    static let commands: Set<String> = ["status", "clean", "kill-old-mcp", "quit", "log", "ports", "stop-port", "share", "report", "mcp", "sims", "help", "--help", "--version", "version"]
+    static let commands: Set<String> = ["status", "clean", "kill-old-mcp", "quit", "log", "ports", "stop-port", "share", "report", "mcp", "sims", "spotlight", "help", "--help", "--version", "version"]
 
     /// Runs a command and exits when the binary was started with one; otherwise returns and the app starts.
     static func runIfRequested() {
@@ -27,6 +27,7 @@ enum CLI {
         case "report": code = report(rest)
         case "mcp": code = rest.contains("--config") ? MCPServer.printConfig() : MCPServer.run()
         case "sims": code = sims(rest)
+        case "spotlight": code = spotlight(json: rest.contains("--json"))
         case "--version", "version": code = version()
         default: code = help()
         }
@@ -54,8 +55,22 @@ enum CLI {
             mem += " · under pressure \(Int((share * 100).rounded()))% of \(windowText(s.memHistory.first?.t))"
         }
         out.append(mem)
+        if let p = s.paging, p.swapNearlyFull || p.worthNamingPagers(s.config.memory.thrash) {
+            var line = "         " + p.summary.prefix(1).uppercased() + p.summary.dropFirst()
+                + String(format: " · swap %.0f%% full", p.swapFullShare * 100)
+            if !p.topPagers.isEmpty { line += " · paging most: \(p.pagersText)" }
+            out.append(line)
+        }
         if let last = s.memSpikes.last, Date().timeIntervalSince(last.t) <= 86400 {
             out.append("         Last spike \(last.t.formatted(date: .omitted, time: .shortened)) (\(PressureSpikes.label(last))): \(last.summary)")
+        }
+        if s.paging?.spotlightPaging == true {
+            if let folders = s.spotlight?.folders, !folders.isEmpty {
+                out.append("         Spotlight is indexing dev folders: " + folders.prefix(3).map { "\(Paths.abbreviate($0.path)) \(human(kb: $0.kb))" }.joined(separator: ", ")
+                    + ". `lapang spotlight` says how to exclude them.")
+            } else {
+                out.append("         Spotlight (mds_stores) is paging hard. `lapang spotlight` looks for dev folders it indexes.")
+            }
         }
 
         let chores = s.chores
@@ -72,9 +87,14 @@ enum CLI {
             out.append("")
             out.append("Memory users: " + s.memUsers.prefix(6).map { "\($0.name) \(human(bytes: Int64($0.bytes)))" }.joined(separator: " · "))
         }
+        if !s.mcpGroups.isEmpty {
+            out.append("MCP servers: " + s.mcpGroups.prefix(5).map { g in
+                "\(g.summary)" + (g.orphaned > 0 ? " (\(g.orphaned) orphaned)" : "")
+            }.joined(separator: " · "))
+        }
         let mcp = s.procs.filter { $0.kind == "mcp" }
         if !s.procs.isEmpty {
-            let total = s.procs.reduce(UInt64(0)) { $0 + $1.rssBytes }
+            let total = s.procs.reduce(UInt64(0)) { $0 + $1.footprintBytes }
             var line = "Dev processes: \(s.procs.count) · \(human(bytes: Int64(total)))"
             if mcp.count > 1 {
                 line += " · \(mcp.count) MCP servers; `lapang kill-old-mcp` frees \(human(bytes: Int64(oldMCPBytes(s))))"
@@ -166,13 +186,17 @@ enum CLI {
                 "pressure": "\(s.pressureLevel)", "usedGB": Double(s.memUsed) / 1_073_741_824,
                 "totalGB": Double(s.memTotal) / 1_073_741_824,
                 "swapUsedGB": Double(s.swapUsed) / 1_073_741_824, "swapDraining": s.swapDraining,
+                "status": s.pressureText, "level": "\(s.memoryLevel)", "thrashing": s.thrashing,
+                "paging": opt(s.paging.map(pagingJSON)),
+                "footprint": "phys_footprint: compressed and swapped pages included, not resident size",
                 "pressuredShare24h": opt(MemoryHistory.pressuredShare(s.memHistory)),
                 "users": s.memUsers.map { ["name": $0.name, "bytes": $0.bytes, "processes": $0.processes] },
                 "spikes": s.memSpikes.suffix(20).reversed().map { sp -> [String: Any] in [
                     "at": ISO8601DateFormatter().string(from: sp.t), "trigger": sp.trigger.rawValue,
                     "swapGB": (sp.swapGB * 10).rounded() / 10, "swapGrowthGB": opt(sp.swapGrowthGB),
                     "comparedWith": opt(sp.since.map { ISO8601DateFormatter().string(from: $0) }),
-                    "culprits": sp.culprits.map { ["name": $0.name, "mb": $0.mb, "growthMB": opt($0.growthMB)] },
+                    "culprits": sp.culprits.map { ["name": $0.name, "mb": $0.mb, "growthMB": opt($0.growthMB),
+                                                   "readable": $0.growthMB.map { human(delta: Int64($0) * 1_048_576) } ?? human(bytes: Int64($0.mb) * 1_048_576)] },
                 ] },
             ],
             "chores": s.chores.map { ["title": $0.title, "detail": $0.subtitle, "action": $0.button, "diskKB": $0.kb] },
@@ -185,11 +209,25 @@ enum CLI {
             ] },
             "simulatorStorage": opt(s.simStorage.map(simJSON)),
             "processes": s.procs.map { [
-                "pid": $0.pid, "name": $0.name, "kind": $0.kind, "bytes": $0.rssBytes,
-                "folder": $0.cwd, "stale": $0.stale, "uptime": $0.uptime,
+                "pid": $0.pid, "name": $0.name, "kind": $0.kind, "bytes": $0.footprintBytes, "footprintBytes": $0.footprintBytes,
+                "folder": $0.cwd, "stale": $0.stale, "orphaned": $0.orphaned, "parentPid": $0.ppid, "uptime": $0.uptime,
                 "idleHours": opt($0.idleHours.map { ($0 * 10).rounded() / 10 }), "session": opt($0.session),
             ] },
             "ports": s.ports.map(portJSON),
+            "mcpServers": s.mcpGroups.map { g -> [String: Any] in [
+                "command": g.command, "count": g.pids.count, "pids": g.pids, "processes": g.processes,
+                "footprintBytes": g.bytes, "readable": human(bytes: Int64(g.bytes)), "orphaned": g.orphaned,
+            ] },
+            "spotlight": spotlightJSON(s),
+            "launchAgents": s.crashLoops.map { l -> [String: Any] in [
+                "label": l.label, "plist": l.plist, "lastExit": l.lastExit, "runs": l.runs,
+                "runsPerHour": opt(l.runsPerHour.map { $0.rounded() }), "program": opt(l.program), "logs": l.logs,
+                "brewService": opt(l.brewService), "fix": l.fixCommand, "crashLooping": true,
+            ] },
+            "runawayLogs": s.runawayLogs.map { l -> [String: Any] in [
+                "path": l.path, "bytes": l.bytes, "readable": human(bytes: l.bytes),
+                "growthMBPerDay": l.mbPerDay.rounded(), "estimated": l.estimated, "agent": opt(l.agent),
+            ] },
             "xcodeCaches": s.derived.map { [
                 "project": $0.title, "status": "\($0.status)", "kb": opt($0.sizeKB), "idleDays": $0.idleDays,
             ] },
@@ -207,9 +245,34 @@ enum CLI {
         ]
     }
 
+    static func pagingJSON(_ p: Paging) -> [String: Any] {
+        let r = { (x: Double) in (x * 10).rounded() / 10 }
+        return [
+            "windowSeconds": r(p.seconds), "pageinsPerSec": r(p.pageinsPerSec), "swapinsPerSec": r(p.swapinsPerSec),
+            "swapoutsPerSec": r(p.swapoutsPerSec), "pagingMBps": r(p.pagingBytesPerSec / 1_048_576),
+            "swapFullShare": (p.swapFullShare * 100).rounded() / 100, "swapNearlyFull": p.swapNearlyFull, "heavy": p.heavy,
+            "disk": ["readOpsPerSec": r(p.readOpsPerSec), "writeOpsPerSec": r(p.writeOpsPerSec), "iops": r(p.iops),
+                     "readMBps": r(p.readBytesPerSec / 1_048_576), "writeMBps": r(p.writeBytesPerSec / 1_048_576)],
+            "topPagers": p.topPagers.map { ["pid": $0.pid, "name": $0.name, "pageins": $0.pageins,
+                                            "MBps": r($0.bytesPerSecond / 1_048_576), "spotlight": $0.isSpotlight] },
+            "spotlightPaging": p.spotlightPaging,
+        ]
+    }
+
+    static func spotlightJSON(_ s: Snapshot) -> [String: Any] {
+        [
+            "spotlightPaging": s.paging?.spotlightPaging ?? false,
+            "checkedAt": s.spotlight?.measuredAt.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull(),
+            "indexedFolders": (s.spotlight?.folders ?? []).map { ["path": $0.path, "kb": $0.kb, "readable": human(kb: $0.kb),
+                                                                  "indexedItems": $0.items, "exclude": SpotlightReport.excludeCommand($0.path)] },
+            "howToExclude": SpotlightReport.howTo,
+        ]
+    }
+
     // MARK: actions
 
-    /// `lapang clean [--only caches,processes,simulators,worktrees] [--include-building] [--yes]`
+    /// `lapang clean [--only caches,processes,simulators,ports,worktrees,agents,logs] [--include-building] [--yes]`.
+    /// agents and logs only when named: stopping a service or emptying its log is one at a time.
     static func clean(_ args: [String]) -> Int32 {
         let s = snapshot()
         let force = args.contains("--include-building")
@@ -226,6 +289,8 @@ enum CLI {
             case .worktrees: return only.contains("worktrees")
             case .simUnavailable: return only.contains("simulators")
             case .simRuntime: return false
+            case .agent: return only.contains("agents")
+            case .log: return only.contains("logs")
             }
         }
         let runtimes = s.chores.compactMap { c -> SimRuntime? in if case .simRuntime(let r, _) = c.kind { return r }; return nil }
@@ -236,14 +301,31 @@ enum CLI {
             : "Left running, a build is aimed at \(busy.count == 1 ? "it" : "them"): "
                 + busy.map { "\($0.name) (\($0.usage.summary ?? "building"))" }.joined(separator: ", ")
                 + ". --include-building shuts \(busy.count == 1 ? "it" : "them") down anyway, which breaks the build."
+        let skipped = s.chores.filter { c in
+            if case .agent = c.kind { return !only.contains("agents") }
+            if case .log = c.kind { return !only.contains("logs") }
+            return false
+        }
+        let backgroundHint = skipped.isEmpty ? nil
+            : "Left to `lapang clean --only agents,logs`: " + skipped.map { "\($0.title) (\($0.subtitle))" }.joined(separator: ", ") + "."
         defer {
             if let buildingHint { print(buildingHint) }
             if let runtimeHint { print(runtimeHint) }
+            if let backgroundHint { print(backgroundHint) }
         }
         guard !chores.isEmpty else { print("Nothing to clean."); return 0 }
         guard args.contains("--yes") else {
             print("Would clean (run again with --yes to do it):")
-            for c in chores { print("  - \(c.button.lowercased()): \(c.title) (\(c.subtitle))") }
+            for c in chores {
+                var line = "  - \(c.button.lowercased()): \(c.title) (\(c.subtitle))"
+                switch c.kind {
+                case .agent(let l): line += ", runs `\(l.fixCommand)`"
+                case .log(let l): line += ", \(Paths.abbreviate(l.path)) emptied in place"
+                case .process(let p) where p.orphaned: line += ", pid \(p.pid), its parent is gone"
+                default: break
+                }
+                print(line)
+            }
             return 0
         }
         ActionLog.$batch.withValue("clean") {
@@ -257,6 +339,8 @@ enum CLI {
                 case .simulators(let list): result = list.compactMap { Actions.shutdownSim($0, force: force) }.first ?? "Shut down \(list.map(\.name).joined(separator: ", "))"
                 case .simUnavailable: result = SimActions.deleteUnavailable()
                 case .simRuntime: result = nil
+                case .agent(let l): result = BackgroundActions.stop(l)
+                case .log(let l): result = BackgroundActions.truncate(l, allowed: RunawayLogs.dirs(s.config))
                 }
                 print("  - \(c.title): \(result ?? "done")")
             }
@@ -265,19 +349,26 @@ enum CLI {
     }
 
     static func oldMCPBytes(_ s: Snapshot) -> UInt64 {
-        let mcp = s.procs.filter { $0.kind == "mcp" }
-        let older = mcp.dropLast()
-        return s.procs.filter { p in older.contains { $0.pid == p.pid || $0.pid == p.ppid } }.reduce(0) { $0 + $1.rssBytes }
+        let older = s.procs.filter { $0.kind == "mcp" }.dropLast()
+        return s.procs.filter { p in p.orphaned || older.contains { $0.pid == p.pid || $0.pid == p.ppid } }
+            .reduce(0) { $0 + $1.footprintBytes }
     }
 
     /// `lapang kill-old-mcp [--yes]`: every MCP server but the newest, with its children.
     static func killOldMCP(yes: Bool) -> Int32 {
         let s = snapshot()
         let older = Array(s.procs.filter { $0.kind == "mcp" }.dropLast())
-        guard !older.isEmpty else { print("At most one MCP server is running; nothing to do."); return 0 }
-        let kids = s.procs.filter { p in older.contains { $0.pid == p.ppid } }
+        let orphans = s.procs.filter { p in p.orphaned && !older.contains { $0.pid == p.pid || $0.pid == p.ppid } }
+        guard !older.isEmpty || !orphans.isEmpty else { print("At most one MCP server is running; nothing to do."); return 0 }
+        let kids = s.procs.filter { p in older.contains { $0.pid == p.ppid } } + orphans
         guard yes else {
-            print("Would kill \(older.count) MCP server(s) and their language servers, freeing about \(human(bytes: Int64(oldMCPBytes(s)))).")
+            if !older.isEmpty {
+                print("Would kill \(older.count) MCP server(s) and their language servers.")
+            }
+            for o in orphans {
+                print("Would kill orphaned \(o.name) (pid \(o.pid), \(ProcessFold.kindName[o.kind] ?? o.kind), \(human(bytes: Int64(o.footprintBytes)))): its parent is gone.")
+            }
+            print("Frees about \(human(bytes: Int64(oldMCPBytes(s)))).")
             print("Those sessions lose their MCP tools until they restart. Run again with --yes to do it.")
             return 0
         }
@@ -365,6 +456,39 @@ enum CLI {
             let detail = e.target.sorted { $0.key < $1.key }.map { "\($0.key)=\(Paths.abbreviate($0.value))" }
             print("    " + detail.joined(separator: "  "))
         }
+        return 0
+    }
+
+    // MARK: spotlight
+
+    /// `lapang spotlight [--json]`: large dev folders Spotlight indexes, measured now. Only reports;
+    /// excluding a folder is for you to do.
+    static func spotlight(json: Bool) -> Int32 {
+        let (config, _) = Config.load()
+        if !json { FileHandle.standardError.write(Data("Checking which dev folders Spotlight indexes. This can take a couple of minutes…\n".utf8)) }
+        let r = Spotlight.check(config)
+        if json {
+            var s = snapshot()
+            s.spotlight = r
+            let data = try! JSONSerialization.data(withJSONObject: spotlightJSON(s), options: [.prettyPrinted, .sortedKeys])
+            print(String(decoding: data, as: UTF8.self))
+            return 0
+        }
+        if r.indexingOff { print("Spotlight indexing is off for this Mac's data volume."); return 0 }
+        let roots = Spotlight.roots(config).map(Paths.abbreviate)
+        guard !r.folders.isEmpty else {
+            print("No dev folder of \(config.spotlight.minGB.formatted()) GB or more is being indexed under \(roots.joined(separator: ", ")).")
+            print("Set spotlight.roots in \(Paths.abbreviate(Config.path)) to check other folders.")
+            return 0
+        }
+        print("Spotlight indexes these dev folders (under \(roots.joined(separator: ", "))):")
+        for f in r.folders {
+            print("  - \(Paths.abbreviate(f.path)): \(human(kb: f.kb)), \(f.items.formatted()) items indexed")
+        }
+        print("")
+        print(SpotlightReport.howTo)
+        print("For example:")
+        for f in r.folders.prefix(3) { print("  " + SpotlightReport.excludeCommand(f.path)) }
         return 0
     }
 
@@ -491,10 +615,13 @@ enum CLI {
     static func help() -> Int32 {
         print("""
         lapang status [--json]       what the menu bar panel shows, as text or JSON
-        lapang clean [--only caches,processes,simulators,ports,worktrees] [--include-building] [--yes]
-                                       stale processes, orphaned/unused build caches, simulators (not mid-build),
-                                       servers from deleted folders, build output of merged, idle worktrees
-        lapang kill-old-mcp [--yes]  kill every MCP server but the newest (and its language server)
+        lapang clean [--only caches,processes,simulators,ports,worktrees,agents,logs] [--include-building] [--yes]
+                                       stale and orphaned processes, orphaned/unused build caches, simulators
+                                       (not mid-build), servers from deleted folders, build output of merged,
+                                       idle worktrees; agents (crash-looping LaunchAgents) and logs (runaway
+                                       log files) only when named in --only
+        lapang kill-old-mcp [--yes]  kill every MCP server but the newest (and its language server), and
+                                       language servers left orphaned when their MCP server or editor died
         lapang kill-old-mcp --idle [--hours N] [--keep N] [--yes]
                                        stop MCP servers with no tool calls for N hours (config's idleHours)
         lapang quit "<app>" [--yes]  ask an app from "Memory users" to quit
@@ -521,6 +648,8 @@ enum CLI {
                                        remove simulators whose runtime is gone
         lapang sims delete-runtime <version|id> [--yes]
                                        remove a simulator runtime nothing booted is using
+        lapang spotlight [--json]    large dev folders Spotlight is indexing, and how to exclude them
+                                       (Lapang never changes Spotlight's settings)
         lapang --version             the installed version and build number
 
         Actions only print what they would do unless --yes is given.

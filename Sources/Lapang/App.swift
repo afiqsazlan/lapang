@@ -57,7 +57,7 @@ struct MenuLabel: View {
     var body: some View {
         // Kept narrow: on a notched MacBook, menu bar items that don't fit are silently hidden.
         if let s = snap {
-            let alert = s.diskLevel != .ok || s.pressureLevel == .crit || s.forecastWarning
+            let alert = s.diskLevel != .ok || s.pressureLevel == .crit || s.thrashing || s.forecastWarning
             HStack(spacing: alert ? 2 : 4) {
                 if alert {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -104,7 +104,9 @@ func renderPanel(to path: String) async {
     let m = Monitor(startTimer: false)
     let args = CommandLine.arguments
     if args.contains("--demo") {
-        m.snap = Demo.snapshot()
+        var snap = Demo.snapshot()
+        if args.contains("--thrash") { Demo.addThrash(&snap) }
+        m.snap = snap
         ActionLog.demo = Demo.actions()
         m.updated = Date()
         m.frozen = true
@@ -124,8 +126,10 @@ func renderPanel(to path: String) async {
     if let i = args.firstIndex(of: "--window") {
         // `--window [page]` draws the window at its default size instead of the panel
         let page = i + 1 < args.count && !args[i + 1].hasPrefix("--") ? args[i + 1] : "overview"
+        // `--height N` draws a taller window, to show what's below the fold
+        let height = args.firstIndex(of: "--height").flatMap { $0 + 1 < args.count ? Double(args[$0 + 1]) : nil }
         let root = MainWindow(page: page).environmentObject(m)
-            .frame(width: MainWindow.defaultSize.width, height: MainWindow.defaultSize.height)
+            .frame(width: MainWindow.defaultSize.width, height: height ?? MainWindow.defaultSize.height)
         await snapshotView(NSHostingView(rootView: root), to: path, light: args.contains("--light"))
     }
     let open = renderOpenFolds(args)

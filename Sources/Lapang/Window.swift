@@ -39,13 +39,13 @@ extension Snapshot {
                   value: String(format: "%.0f GB free", freeGB), attention: diskLevel != .ok || forecastWarning,
                   subtitle: String(format: "%.0f GB free of %.0f GB", freeGB, totalGB)) { AnyView(DiskPage(s: self)) },
             .init(id: "memory", title: "Memory", icon: "memorychip", group: .main,
-                  value: "\(memShare)%", attention: pressureLevel != .ok,
+                  value: "\(memShare)%", attention: memoryLevel != .ok,
                   subtitle: String(format: "%.1f of %.0f GB used · %@", Double(memUsed) / 1_073_741_824,
                                    Double(memTotal) / 1_073_741_824, pressureText),
-                  scrolls: false) { AnyView(MemoryPage(s: self)) },
+                  scrolls: true) { AnyView(MemoryPage(s: self)) },
         ]
         if !config.processes.names.isEmpty {
-            let total = procs.reduce(UInt64(0)) { $0 + $1.rssBytes }
+            let total = procs.reduce(UInt64(0)) { $0 + $1.footprintBytes }
             pages.append(.init(id: "processes", title: "Processes", icon: "cpu", group: .dev,
                                value: "\(procs.count)", attention: procs.contains(where: \.stale),
                                subtitle: "\(procs.count) running · \(human(bytes: Int64(total)))",
@@ -103,6 +103,7 @@ extension Snapshot {
     }
 
     var pressureText: String {
+        if thrashing { return "Swap thrashing" }
         switch pressureLevel {
         case .ok: return "Normal"
         case .warn: return "Under pressure"
@@ -364,8 +365,8 @@ struct MemoryCard: View {
             HStack(spacing: 6) {
                 Caption(text: "Memory")
                 Spacer()
-                if s.pressureLevel != .ok { Circle().fill(s.pressureLevel.color).frame(width: 6, height: 6) }
-                Text(s.pressureText).font(.callout).foregroundStyle(s.pressureLevel.color)
+                if s.memoryLevel != .ok { Circle().fill(s.memoryLevel.color).frame(width: 6, height: 6) }
+                Text(s.pressureText).font(.callout).foregroundStyle(s.memoryLevel.color)
             }
             BigNumber(value: String(format: "%.1f GB", Double(s.memUsed) / 1_073_741_824),
                       unit: String(format: "used of %.0f GB", Double(s.memTotal) / 1_073_741_824))
@@ -398,7 +399,7 @@ struct MemoryCard: View {
             .foregroundStyle(.secondary)
             .padding(.top, 2)
             MemoryChart(points: s.memHistory, value: \.swapGB, top: nil, height: chartHeight)
-            if s.pressureLevel != .ok && s.diskLevel != .ok {
+            if s.memoryLevel != .ok && s.diskLevel != .ok {
                 Text("Swap lives on the disk and can't grow while it's this full. Freeing disk space helps memory too.")
                     .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
@@ -587,6 +588,14 @@ struct MemoryPage: View {
                 .card()
             }
             .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top, spacing: 14) {
+                if let p = s.paging { PagingCard(s: s, p: p).card() }
+                if !s.mcpGroups.isEmpty { MCPFanoutCard(s: s).card() }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            if s.paging?.spotlightPaging == true || s.spotlight?.folders.isEmpty == false {
+                SpotlightCard(s: s).card()
+            }
             MemoryUsersTable(s: s)
             Footnote(text: "Memory footprint, as in Activity Monitor. Apps include their helper processes.")
         }
@@ -614,12 +623,17 @@ private struct MemoryUsersTable: View {
                 .width(28)
         }
         .tableStyle(.inset(alternatesRowBackgrounds: false))
+        // the page scrolls, so the table is as tall as its rows instead of scrolling itself
+        .frame(height: CGFloat(s.memUsers.count) * 26 + 36)
+        .scrollDisabled(true)
     }
 }
 
 // MARK: - Dev
 
 extension DevProc {
+    var staleTag: String { orphaned ? "orphaned" : "stale" }
+
     var label: String {
         kind == "mcp" ? "\(name) MCP server" : (ProcessFold.kindName[kind] ?? kind)
     }
@@ -630,7 +644,7 @@ extension DevProc {
 struct ProcessesPage: View {
     @EnvironmentObject var m: Monitor
     let s: Snapshot
-    @State private var order = [KeyPathComparator(\DevProc.rssBytes, order: .reverse)]
+    @State private var order = [KeyPathComparator(\DevProc.footprintBytes, order: .reverse)]
     @State private var selection = Set<pid_t>()
 
     var body: some View {
@@ -639,7 +653,7 @@ struct ProcessesPage: View {
                 TableColumn("Process", value: \.label) { p in
                     HStack(spacing: 5) {
                         Text(p.label)
-                        if p.stale { Tag(text: "stale", color: .orange) }
+                        if p.stale { Tag(text: p.staleTag, color: .orange) }
                         if let idle = p.idleTag { Tag(text: idle, color: .secondary) }
                     }
                     .help("pid \(p.pid)")
@@ -650,7 +664,7 @@ struct ProcessesPage: View {
                 }
                 TableColumn("Started by", value: \.sessionText) { p in Text(p.sessionText).foregroundStyle(.secondary) }
                     .width(min: 70, ideal: 100)
-                TableColumn("Memory", value: \.rssBytes) { p in Num(text: human(bytes: Int64(p.rssBytes))) }
+                TableColumn("Memory", value: \.footprintBytes) { p in Num(text: human(bytes: Int64(p.footprintBytes))) }
                     .width(min: 64, ideal: 76, max: 90)
                 TableColumn("Up", value: \.started) { p in Num(text: p.uptime) }
                     .width(min: 56, ideal: 64, max: 80)
@@ -662,7 +676,7 @@ struct ProcessesPage: View {
                 Button("Reveal folder in Finder") { reveal(ids) }
             } primaryAction: { reveal($0) }
             MCPCleanupNote(s: s, mcp: s.procs.filter { $0.kind == "mcp" })
-            Footnote(text: "Watched: \(s.config.processes.names.joined(separator: ", ")). A process is stale when its parent died or its folder is gone. Double-click to reveal its folder.")
+            Footnote(text: "Watched: \(s.config.processes.names.joined(separator: ", ")). A process is stale when its parent died or its folder is gone, and orphaned when it's a language server whose MCP server or editor is gone. Double-click to reveal its folder.")
         }
     }
 

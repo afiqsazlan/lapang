@@ -66,7 +66,7 @@ enum Actions {
     private static func terminate(_ p: DevProc, action: String) -> Bool {
         let ok: Bool, result: String?, footprint: UInt64?
         if sameProcess(p) {
-            footprint = MemoryProbe.footprint(p.pid) ?? p.rssBytes
+            footprint = MemoryProbe.footprint(p.pid) ?? p.footprintBytes
             ok = Darwin.kill(p.pid, SIGTERM) == 0
             result = ok ? nil : String(cString: strerror(errno))
         } else {
@@ -139,9 +139,15 @@ func human(kb: Int64?) -> String {
 }
 
 func human(bytes: Int64) -> String {
+    if bytes < 0 { return "−" + human(bytes: bytes == .min ? .max : -bytes) }
     let b = Double(bytes)
     if b >= 1_073_741_824 { return String(format: "%.1f GB", b / 1_073_741_824) }
     if b >= 1_048_576 { return String(format: "%.0f MB", b / 1_048_576) }
     if b >= 1024 { return String(format: "%.0f KB", b / 1024) }
     return "\(bytes) B"
+}
+
+/// A change in size with one sign: "+1.2 GB", "−848 MB", "0 B".
+func human(delta bytes: Int64) -> String {
+    bytes > 0 ? "+" + human(bytes: bytes) : human(bytes: bytes)
 }

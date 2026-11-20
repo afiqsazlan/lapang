@@ -23,7 +23,7 @@ struct PressureSpike: Codable, Identifiable {
 
     var summary: String {
         culprits.map { c in
-            if let g = c.growthMB { return "\(c.name) +\(human(bytes: Int64(g) << 20))" }
+            if let g = c.growthMB { return "\(c.name) \(human(delta: Int64(g) * 1_048_576))" }
             return "\(c.name) \(human(bytes: Int64(c.mb) << 20))"
         }.joined(separator: ", ")
     }

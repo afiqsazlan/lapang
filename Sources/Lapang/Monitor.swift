@@ -10,6 +10,7 @@ final class Monitor: ObservableObject {
     @Published var refreshing = false
     @Published var measuring = false
     @Published var measuringWorktrees = false
+    @Published var checkingSpotlight = false
     @Published var message: String?
     /// Set for the demo render: never replace the sample data with this Mac's.
     var frozen = false
@@ -52,6 +53,18 @@ final class Monitor: ObservableObject {
         WeeklyRecap.maybeNotify(s)
         if SizeStore.shared.isDue { measure() }
         if !frozen { measureWorktrees(s) }
+        if automate, s.paging?.spotlightPaging == true, Spotlight.isDue(s.config) { checkSpotlight(s.config) }
+    }
+
+    /// Finds the code folders Spotlight indexes, when it's among the top pagers and the last check is old.
+    func checkSpotlight(_ config: Config) {
+        guard !checkingSpotlight else { return }
+        checkingSpotlight = true
+        Task {
+            await Task.detached(priority: .background) { _ = Spotlight.check(config) }.value
+            checkingSpotlight = false
+            await refresh()
+        }
     }
 
     /// Measures worktree output folders that changed since they were last measured.

@@ -32,13 +32,25 @@ struct Snapshot {
     var sizesMeasuredAt: Date?
     var sections: [SectionState]
     var worktrees: [WorktreeUnit] = []
+    /// Paging and disk traffic over a short window, and who was paging most when it was heavy.
+    var paging: Paging? = nil
+    /// MCP servers by command, with what they started.
+    var mcpGroups: [MCPGroup] = []
+    /// Large dev folders Spotlight indexes, from the last check (see Spotlight.check).
+    var spotlight: SpotlightReport? = nil
+    var crashLoops: [CrashLoop] = []
+    var runawayLogs: [RunawayLog] = []
 
     var freeGB: Double { Double(freeBytes) / 1_073_741_824 }
     var totalGB: Double { Double(totalBytes) / 1_073_741_824 }
     var usedFraction: Double { totalBytes > 0 ? 1 - Double(freeBytes) / Double(totalBytes) : 0 }
     /// Pressure is back to normal but swap is still over a quarter of RAM. macOS leaves pages in
     /// swap until something touches them, so swap trails the recovery by a while.
-    var swapDraining: Bool { pressureLevel == .ok && swapUsed > memTotal / 4 }
+    var swapDraining: Bool { pressureLevel == .ok && swapUsed > memTotal / 4 && !thrashing }
+    /// Swap nearly full and the disk busy paging it back in. Pressure can read normal through this.
+    var thrashing: Bool { paging?.thrashing ?? false }
+    /// Pressure, raised to a warning while thrashing: what the memory line shows.
+    var memoryLevel: Level { thrashing && pressureLevel == .ok ? .warn : pressureLevel }
 
     /// The fill rate says free space reaches the warning line soon, though it isn't there yet.
     var forecastWarning: Bool {
@@ -93,10 +105,14 @@ struct DevProc: Identifiable {
     let ppid: pid_t
     let name: String
     let kind: String
-    let rssBytes: UInt64  // memory footprint (resident size when that's unavailable)
+    /// phys_footprint: what the process really costs, compressed and swapped pages included. Resident
+    /// size (which leaves those out) only when the footprint can't be read.
+    let footprintBytes: UInt64
     let started: Date
     let cwd: String
-    let stale: Bool
+    var stale: Bool
+    /// A helper server (language server and the like) whose parent is gone; always stale too.
+    var orphaned = false
     /// MCP servers only: when it last used CPU (see MCPActivity) and the agent session that started it.
     var idleSince: Date? = nil
     var session: String? = nil
@@ -160,6 +176,10 @@ struct HistoryPoint: Identifiable, Codable {
 enum Engine {
     static func snapshot(sectionsFrom previous: [SectionState]) -> Snapshot {
         let (config, configError) = Config.load()
+        // a quiet second for the paging window, before Lapang's own reads add to it
+        let pagingStart = PagingCounters.now()
+        usleep(1_000_000)
+        let pagingEnd = PagingCounters.now()
         let (free, total) = disk()
         let (swapUsed, swapTotal) = swap()
         let root = derivedDataRoot()
@@ -198,6 +218,27 @@ enum Engine {
         full.memSpikes = PressureSpikes.observe(point, previous: recorded.previous, stored: recorded.stored,
                                                 history: recorded.day, users: users)
         full.ports = Ports.discover(config.ports)
+        var paging = Paging.measure(from: pagingStart, to: pagingEnd, swapUsed: swapUsed, swapTotal: swapTotal,
+                                    rule: config.memory.thrash)
+        if paging.worthNamingPagers(config.memory.thrash) { paging.topPagers = Paging.pagers() }
+        full.paging = paging
+        let services = LaunchAgents.services()
+        let jobs = LaunchAgents.jobPIDs(services)
+        let table = ProcTable.build()
+        let fan = MCPFanout.groups(table, launchdJobs: jobs)
+        full.mcpGroups = fan.groups
+        Orphans.mark(&full.procs, table: table, mcpServers: fan.servers, launchdJobs: jobs,
+                     extra: config.processes.orphanCommands)
+        let plists = LaunchAgents.plists()
+        full.crashLoops = LaunchAgents.crashLoops(services, plists: plists, ignore: config.launchAgents.ignore)
+        var agentLogs: [String: String] = [:]
+        for (label, plist) in plists {
+            for key in ["StandardErrorPath", "StandardOutPath"] {
+                if let p = plist[key] as? String { agentLogs[Paths.expand(p)] = label }
+            }
+        }
+        full.runawayLogs = RunawayLogs.find(config, agentLogs: agentLogs)
+        full.spotlight = Spotlight.cached(config)
         let wt = config.worktrees
         if !wt.repos.isEmpty || !wt.roots.isEmpty {
             full.worktrees = WorktreeStore.shared.units(wt, agentFolders: agentFolders())
@@ -449,7 +490,7 @@ enum Engine {
             let stale = ppid == 1 || (!cwd.isEmpty && !FileManager.default.fileExists(atPath: cwd))
             var p = DevProc(
                 pid: pid, ppid: ppid, name: name, kind: kind(name: name, args: args(pid)),
-                rssBytes: MemoryProbe.footprint(pid) ?? task.pti_resident_size,
+                footprintBytes: MemoryProbe.footprint(pid) ?? task.pti_resident_size,
                 started: Date(timeIntervalSince1970: TimeInterval(bsd.pbi_start_tvsec)),
                 cwd: cwd, stale: stale)
             if p.kind == "mcp" {

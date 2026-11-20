@@ -139,6 +139,10 @@ enum MCPServer {
     get_ tools to answer questions about how the Mac is doing; start with get_mac_health. Explain \
     results in plain words: many people asking are not developers.
 
+    When the Mac is slow, get_slowdown_causes covers what pressure misses: swap thrashing, what is \
+    paging most, MCP servers running many copies, orphaned language servers, Spotlight indexing code \
+    folders, crash-looping background services and runaway logs.
+
     The tools that change things (clean_up, stop_old_mcp_servers, quit_app, stop_port) only show a \
     preview unless called with confirm: true. Always call them without confirm first, tell the person \
     what would happen in plain words, and call again with confirm: true only after they clearly agree. \
@@ -193,7 +197,31 @@ enum MCPServer {
                 "kind": "\(u.kind)", "canQuit": u.bundlePath.map(MemoryActions.isQuittable) ?? false,
             ] }
             mem["summary"] = memorySummary(s)
+            mem["mcpServers"] = CLI.jsonObject(s)["mcpServers"]
             return (json(mem), false)
+        },
+
+        Tool(name: "get_slowdown_causes", title: "Why this Mac is slow",
+             description: """
+             The causes of a slow Mac that memory pressure doesn't show. thrashing: swap is nearly full and \
+             the disk is busy reading memory back in, so everything waits even when pressure reads normal. \
+             topPagers: the processes reading the most from disk over the last second. mcpServers: AI helper \
+             servers by command, with how many copies run and their memory including what they started. \
+             orphaned: language servers left running after the editor or helper that started them closed \
+             (clean_up with only ["processes"] stops them). spotlight: large code folders Spotlight is indexing \
+             and how the person can exclude them (only they can; never offer to change Spotlight settings). \
+             launchAgents: background services crashing and restarting over and over; runawayLogs: log files \
+             growing fast (clean_up with only ["agents"] or ["logs"] fixes those). Takes several seconds, longer \
+             with check_spotlight.
+             """,
+             properties: ["check_spotlight": [
+                "type": "boolean", "default": false,
+                "description": "Measure which code folders Spotlight indexes now (can take a few minutes). Without it, the last check is used, and it runs anyway when Spotlight is among the top pagers and no recent check exists.",
+             ]]) { args in
+            var s = CLI.snapshot()
+            let force = (args["check_spotlight"] as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() && $0.boolValue } ?? false
+            if force || (s.paging?.spotlightPaging == true && Spotlight.isDue(s.config)) { s.spotlight = Spotlight.check(s.config) }
+            return (json(slowdown(s)), false)
         },
 
         Tool(name: "get_disk", title: "Disk space, growth and forecast",
@@ -268,8 +296,8 @@ enum MCPServer {
              """,
              properties: [
                 "only": [
-                    "type": "array", "items": ["type": "string", "enum": ["caches", "processes", "simulators", "ports", "worktrees"]],
-                    "description": "Limit the cleanup to some kinds. Leave out to include everything.",
+                    "type": "array", "items": ["type": "string", "enum": ["caches", "processes", "simulators", "ports", "worktrees", "agents", "logs"]],
+                    "description": "Limit the cleanup to some kinds. Leave out to include everything except agents (stop crash-looping background services) and logs (empty runaway log files), which only run when named here.",
                 ],
                 "include_building": [
                     "type": "boolean", "default": false,
@@ -287,7 +315,8 @@ enum MCPServer {
              description: """
              AI coding tools such as Claude Code start small helper programs ("MCP servers"), and old ones \
              can keep running and using memory after their session is over. This stops all but the newest, \
-             or with idle_hours, only those with no activity for that long. Any open session that used a \
+             or with idle_hours, only those with no activity for that long. Without idle_hours it also stops \
+             language servers left orphaned when the helper or editor that started them died. Any open session that used a \
              stopped helper loses those tools until it restarts. Without confirm it only previews.
              """,
              properties: [
@@ -346,10 +375,49 @@ enum MCPServer {
         return out
     }
 
+    static func slowdown(_ s: Snapshot) -> [String: Any] {
+        let all = CLI.jsonObject(s)
+        var causes: [String] = []
+        if let p = s.paging {
+            if p.thrashing {
+                causes.append("Swap thrashing: swap is \(Int(p.swapFullShare * 100))% full and \(p.summary).")
+            } else if p.heavy {
+                causes.append("The disk is busy: \(p.summary).")
+            }
+            if !p.topPagers.isEmpty { causes.append("Paging most: \(p.pagersText).") }
+        }
+        if let g = s.mcpGroups.first(where: { $0.pids.count > 1 }) { causes.append("\(g.summary) of MCP servers.") }
+        let orphans = s.procs.filter(\.orphaned)
+        if !orphans.isEmpty {
+            causes.append("\(orphans.count) orphaned language server\(orphans.count == 1 ? "" : "s") using \(human(bytes: Int64(orphans.reduce(0) { $0 + $1.footprintBytes }))).")
+        }
+        if s.paging?.spotlightPaging == true {
+            let f = s.spotlight?.folders ?? []
+            causes.append(f.isEmpty ? "Spotlight is paging hard." : "Spotlight is indexing \(f.count) large code folder\(f.count == 1 ? "" : "s").")
+        }
+        for l in s.crashLoops { causes.append("\(l.brewService ?? l.label) keeps crashing and restarting (\(l.subtitle)).") }
+        for l in s.runawayLogs { causes.append("\(Paths.abbreviate(l.path)) grows \(Int(l.mbPerDay)) MB a day.") }
+        let mem = all["memory"] as? [String: Any] ?? [:]
+        return [
+            "summary": causes.isEmpty ? memorySummary(s) + " Nothing else stands out." : causes.joined(separator: " "),
+            "memory": ["status": s.pressureText, "thrashing": s.thrashing, "swapUsedGB": mem["swapUsedGB"] ?? 0],
+            "paging": mem["paging"] ?? NSNull(),
+            "mcpServers": all["mcpServers"] ?? [],
+            "orphaned": orphans.map { ["pid": $0.pid, "name": $0.name, "kind": $0.kind, "footprintBytes": $0.footprintBytes,
+                                       "readable": human(bytes: Int64($0.footprintBytes)), "folder": $0.cwd] },
+            "spotlight": all["spotlight"] ?? [:],
+            "launchAgents": all["launchAgents"] ?? [],
+            "runawayLogs": all["runawayLogs"] ?? [],
+        ]
+    }
+
     static func memorySummary(_ s: Snapshot) -> String {
         var line = "Memory is \(s.pressureText.lowercased())" + String(format: ", %.1f of %.0f GB used, swap %@",
             Double(s.memUsed) / 1_073_741_824, Double(s.memTotal) / 1_073_741_824, human(bytes: Int64(s.swapUsed)))
         if s.swapDraining { line += " (left over from earlier pressure, draining)" }
+        if let p = s.paging, p.thrashing {
+            line += String(format: ", swap %.0f%% full and ", p.swapFullShare * 100) + p.summary + ": the disk is the bottleneck"
+        }
         line += "."
         if let share = MemoryHistory.pressuredShare(s.memHistory) {
             line += " Under pressure \(Int((share * 100).rounded()))% of \(CLI.windowText(s.memHistory.first?.t))."

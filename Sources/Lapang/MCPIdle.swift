@@ -70,7 +70,7 @@ enum MCPCleanup {
     struct Candidate {
         let server: DevProc
         let children: [DevProc]
-        var bytes: UInt64 { server.rssBytes + children.reduce(0) { $0 + $1.rssBytes } }
+        var bytes: UInt64 { server.footprintBytes + children.reduce(0) { $0 + $1.footprintBytes } }
     }
 
     /// Idle servers, oldest first, never one of the `keepNewest` most recently started.

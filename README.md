@@ -10,12 +10,12 @@ A small macOS menu bar app that keeps an eye on what quietly fills up a develope
 
 The menu bar shows free disk space (`41G`) and adds a warning sign when space is low or filling fast. The label is kept narrow on purpose: on a notched MacBook, menu bar items that don't fit are silently hidden. If that happens anyway, open Lapang from Spotlight or Finder and the [Lapang window](#the-window) opens instead. The panel shows:
 
-- **Things to clean**: what's worth acting on right now, at the top: build caches whose project is gone or unused for days, stale processes, servers still running from a deleted folder, running simulators, and the build output of merged worktrees nobody has touched for days. Each has its own button, plus one "Clean all". Everything else folds into a single line until you open it.
-- **Memory**: in the header next to disk: memory pressure, RAM used, swap, and a 24-hour pressure strip like Activity Monitor's ("under pressure 78% of the last 24 h"). When pressure rises to warning or critical, or swap grows a gigabyte in ten minutes, Lapang records which apps grew the most in the ten minutes before: hover or click a slice of the strip to see them ("iOS Simulators +3.1 GB, Claude Code sessions +2.4 GB"), and a notification names them when pressure turns critical. Swap is shown as an amount, not against the swap file's size, since macOS grows and shrinks that file as it goes. Swap also drains slowly after pressure eases, so when pressure is back to normal but swap is still over a quarter of RAM it reads "draining" and is not a warning. `lapang status --json` lists recent spikes under `memory.spikes` and has `memory.swapDraining`; it no longer has `memory.swapTotalGB`. "Memory users" lists the apps using the most memory by footprint, helpers included, with a Quit button for apps and Shut down for simulators.
+- **Things to clean**: what's worth acting on right now, at the top: build caches whose project is gone or unused for days, stale processes and orphaned language servers, servers still running from a deleted folder, running simulators, the build output of merged worktrees nobody has touched for days, background services stuck crash-looping (Stop) and logs growing fast (Empty). Each has its own button, plus one "Clean all", which leaves services and logs alone. Everything else folds into a single line until you open it.
+- **Memory**: in the header next to disk: memory pressure, RAM used, swap, and a 24-hour pressure strip like Activity Monitor's ("under pressure 78% of the last 24 h"). When pressure rises to warning or critical, or swap grows a gigabyte in ten minutes, Lapang records which apps grew the most in the ten minutes before: hover or click a slice of the strip to see them ("iOS Simulators +3.1 GB, Claude Code sessions +2.4 GB"), and a notification names them when pressure turns critical. Swap is shown as an amount, not against the swap file's size, since macOS grows and shrinks that file as it goes. Swap also drains slowly after pressure eases, so when pressure is back to normal but swap is still over a quarter of RAM it reads "draining" and is not a warning. `lapang status --json` lists recent spikes under `memory.spikes` and has `memory.swapDraining`; it no longer has `memory.swapTotalGB`. "Memory users" lists the apps using the most memory by footprint, helpers included, with a Quit button for apps and Shut down for simulators. When swap is nearly full and the Mac keeps reading memory back from the disk, memory reads **Swap thrashing** (and the menu bar shows its warning sign), with a line naming the paging rate, disk IOPS and the three processes paging most. If Spotlight is one of them, a line names the large code folders it indexes; click it for the folders and how to exclude them.
 - **Disk**: free space, a usage bar, a sparkline of the last 24 hours, and a full chart (24 hours or 7 days) under "What grew".
 - **Trend**: how fast the disk is filling (a straight-line fit over the last 24 hours, restarting after any cleanup) and when it will reach your warning line, drawn as a dashed projection on the chart. A comparison with the size check from about a day ago shows what grew, e.g. `+4.2 GB Xcode build caches (mostly my-app +3.7 GB)`, with an "everything else" line for growth no measured folder explains. You get a notification when free space drops below your threshold, or when it's on course to within `forecastHours`.
 - **Simulators**: booted iOS simulators and what each is for: the app running inside it, the project folder of the `flutter run` or `xcodebuild` driving it, and the app that launched that (your terminal, Xcode, Claude Code). A simulator still running an app from a deleted folder shows up under things to clean. The fold also shows what simulators take up on disk: each device's size (simctl's measure, which counts APFS clones once where du counts them in full), runtimes with their dyld shared cache, and devices left unavailable by a deleted runtime. Erase a shut-down device, delete a runtime nothing booted uses, or delete the unavailable devices; each asks first, and a booted device is never touched. Runtimes unused for 90 days and unavailable devices appear under things to clean, though Clean all leaves runtimes alone since they're a re-download.
-- **Dev processes**: watched processes (Dart and Flutter by default, including `flutter run`) with memory use and uptime. A process is marked stale when its parent died or its folder is gone.
+- **Dev processes**: watched processes (Dart and Flutter by default, including `flutter run`) with memory use and uptime. A process is marked stale when its parent died or its folder is gone, and orphaned when it's a language server whose MCP server or editor is gone. When an MCP server runs in several copies, "MCP servers by command" counts them with everything they started ("6× dart mcp-server · 10.5 GB").
 - **Ports**: your servers listening on a TCP port: the port, what it is (Vite, Next.js, `php artisan serve`, postgres, redis…), the folder it was started in (the last two folders, so worktrees are told apart), uptime, memory, and whether it's reachable only from this Mac or from the network. Each row has an Open link and a Stop button. Stop sends SIGTERM only to the process that owns the listening socket, after checking it's still the same program. A program that just has a connection to the port, like a tunnel in front of your dev server, is never stopped by mistake. App helpers, system services, other users' processes and ports 49152 and up are left out. Docker and OrbStack port forwards are shown but not stopped.
 - **Idle MCP servers**: every agent session starts its own MCP servers, and the Dart one brings a 2–3 GB language server along. Lapang tracks each MCP server's CPU time and tags the ones with no tool calls for hours (`idle 3h`), along with the Claude Code session that started them. Turn on **Stop idle MCP servers** in the gear menu and it stops servers idle past `idleHours` on its own, always keeping the newest, with one notification ("Stopped 2 idle MCP servers, freed 4.1 GB"). A stopped server's session loses those tools until that session restarts.
 - **Xcode build caches**: one row per DerivedData folder, mapped back to its project. Each shows size and when it was last built, and whether the project still exists. You can clean orphaned or unused caches in bulk; projects you mark as protected are never touched.
@@ -23,7 +23,7 @@ The menu bar shows free disk space (`41G`) and adds a warning sign when space is
 - **Package caches**: npm, Yarn, pnpm, CocoaPods, Gradle, Homebrew, pub, iOS DeviceSupport and Xcode archives, with a Clear button where clearing is safe.
 - **Custom sections**: anything else, from your own scripts (see below).
 
-Destructive buttons always ask first. Folder sizes are measured in the background every 30 minutes, because `du` on big caches is slow.
+The window's Memory page adds a paging card, the MCP servers by command, and the Spotlight check with a **Check now** button. Destructive buttons always ask first. Folder sizes are measured in the background every 30 minutes, because `du` on big caches is slow.
 
 ## The window
 
@@ -86,13 +86,15 @@ lapang status          # the panel as text
 lapang status --json   # the same as JSON
 lapang clean           # what would be cleaned; add --yes to do it (--only caches,processes,simulators,ports,worktrees)
                        # simulators with a build or install running are left alone unless --include-building
+lapang clean --only agents,logs   # stop crash-looping background services, empty runaway logs; add --yes
+lapang spotlight       # large dev folders Spotlight indexes, and how to exclude them (--json)
 lapang sims            # disk use per simulator device, runtime and dyld cache (--json, --all)
 lapang sims erase <udid>          # erase a shut-down simulator; add --yes to do it
 lapang sims delete-runtime 17.2   # delete a runtime nothing booted uses; add --yes to do it
 lapang sims delete-unavailable    # delete simulators whose runtime is gone; add --yes to do it
 lapang ports           # servers listening on a port, with folder and uptime (--json too)
 lapang stop-port 5173  # stop the server listening on 5173; add --yes to do it
-lapang kill-old-mcp    # every MCP server but the newest; add --yes to do it
+lapang kill-old-mcp    # every MCP server but the newest, plus orphaned language servers; add --yes to do it
 lapang kill-old-mcp --idle   # only those idle past idleHours, keeping keepNewest (--hours N, --keep N); add --yes
 lapang quit "Figma"    # ask an app from Memory users to quit; add --yes to do it
 lapang log             # what Lapang did: deleted, killed, shut down, and what it freed
@@ -100,6 +102,15 @@ lapang share today     # a shareable PNG card of what this Mac went through; pri
 lapang report          # a diagnostics file to attach to a GitHub issue; prints its path
 lapang mcp             # an MCP server for Claude; see below
 ```
+
+`lapang status` also says why a Mac is slow when pressure doesn't:
+
+- **Swap thrashing.** Lapang samples page-ins, swap-ins and disk IOPS over one second. When swap is nearly full (`memory.thrash.swapFullShare`) and the Mac is reading memory back from disk faster than `pagingMBps` (or the disk passes `diskIOPS`), memory reads "Swap thrashing" instead of "Normal", with the three processes paging most. `--json` has `memory.thrashing`, `memory.level` and `memory.paging`.
+- **Memory is footprint.** Per-process memory is the footprint Activity Monitor shows, not resident size, which counts shared and compressed pages. JSON fields are `footprintBytes`.
+- **MCP fan-out.** `mcpServers` counts copies of each MCP server command with the memory of everything they started ("6× dart mcp-server · 10.5 GB").
+- **Orphaned language servers.** Language servers (`tsserver`, `gopls`, `rust-analyzer`, anything with `language-server` or `lsp` in its name, plus `processes.orphanCommands`) whose MCP server or editor died are marked `orphaned`. `clean --only processes` and `kill-old-mcp` stop them.
+- **Spotlight.** When `mds_stores` is among the top pagers, Lapang checks which large folders under your dev roots Spotlight indexes (in the background, at most every 6 hours) and says how to exclude them. It never changes Spotlight's settings.
+- **Background services.** `launchAgents` lists your LaunchAgents that keep crashing and being started again; `runawayLogs` lists logs under the Homebrew and `~/Library/Logs` folders growing faster than `logs.growthMBPerDay`. `clean --only agents,logs` stops the service (`brew services stop`, or `launchctl bootout` for other agents) and empties the log. Plain `clean` leaves both alone.
 
 Actions only print what they would do until you add `--yes`. That makes it safe to hand to a coding agent: a Claude Code session (including one you drive from your phone with Remote Control) can run `lapang status`, tell you what's going on, and run the action once you agree.
 
@@ -132,7 +143,7 @@ If you installed with Homebrew, `"command": "/opt/homebrew/bin/lapang"` works to
 claude mcp add lapang -- lapang mcp
 ```
 
-Tools that only look: `get_mac_health` (everything `lapang status --json` shows), `get_memory`, `get_disk` (free space, what grew, when it fills up), `list_simulators`, `list_ports` and `get_recent_actions`.
+Tools that only look: `get_mac_health` (everything `lapang status --json` shows), `get_slowdown_causes` (thrashing, top pagers, MCP fan-out, orphans, Spotlight, crash loops and runaway logs), `get_memory`, `get_disk` (free space, what grew, when it fills up), `list_simulators`, `list_ports` and `get_recent_actions`.
 
 Tools that act: `clean_up`, `stop_old_mcp_servers`, `quit_app` and `stop_port`, the same actions as the commands above. They're marked destructive, and like the commands they only describe what they would do. They act only when Claude calls them again with `confirm: true`, and Claude is told to show you the preview and ask first. What they do lands in the action log with the source `mcp`.
 
@@ -188,15 +199,19 @@ Gear menu → **Edit config…** opens `~/.config/lapang/config.json`, creating 
 {
   "refreshSeconds": 60,
   "disk": { "warnGB": 20, "criticalGB": 10, "notify": true, "forecastHours": 24, "watch": ["~/Downloads"] },
-  "memory": { "notify": true },
+  "memory": { "notify": true, "thrash": { "swapFullShare": 0.85, "pagingMBps": 64, "diskIOPS": 5000 } },
   "xcode": {
     "idleDays": 3,
     "protect": ["~/code/my-app"]
   },
   "processes": {
     "names": ["dart", "dartvm", "dartaotruntime"],
-    "mcpCleanup": { "enabled": false, "idleHours": 2, "keepNewest": 1 }
+    "mcpCleanup": { "enabled": false, "idleHours": 2, "keepNewest": 1 },
+    "orphanCommands": ["my-lsp"]
   },
+  "spotlight": { "roots": ["~/code"], "minGB": 2 },
+  "launchAgents": { "ignore": ["com.example.agent"] },
+  "logs": { "dirs": ["/opt/homebrew/var/log"], "growthMBPerDay": 100 },
   "caches": { "hide": ["pnpm"] },
   "ports": { "minPort": 1024, "maxPort": 49151, "hide": [5000, "adb"], "names": { "3000": "tunnel origin" } },
   "worktrees": {
@@ -214,6 +229,11 @@ Gear menu → **Edit config…** opens `~/.config/lapang/config.json`, creating 
 
 - `disk.forecastHours`: warn early when the fill rate says free space will reach `warnGB` within this many hours.
 - `memory.notify`: a notification when memory pressure turns critical, naming what grew (at most once an hour).
+- `memory.thrash`: when memory reads "Swap thrashing": swap at least `swapFullShare` full, and paging at least `pagingMBps` or the disk at `diskIOPS` operations a second.
+- `processes.orphanCommands`: more helper server names to treat like language servers when their parent dies.
+- `spotlight.roots`: dev folders to check for Spotlight indexing (default: `~/Developer`, `~/Sites`, `~/code` and the like that exist, plus your worktree repos). Folders under `minGB` aren't reported.
+- `launchAgents.ignore`: LaunchAgent labels never reported as crash-looping.
+- `logs.dirs`, `logs.growthMBPerDay`: where to look for runaway logs (default: the Homebrew log folders and `~/Library/Logs`, plus logs your LaunchAgents write) and how fast counts as runaway. Logs under 50 MB aren't reported.
 - `disk.watch`: extra folders to include in "what's growing". Xcode and package caches are always measured.
 - `xcode.protect`: project folders whose build caches are never cleaned in bulk, usually your main checkouts. Rebuilding those from scratch is slow, while caches of throwaway worktrees aren't worth keeping.
 - `processes.names`: executable names to watch.

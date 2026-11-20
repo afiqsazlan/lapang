@@ -245,11 +245,11 @@ struct MemoryLine: View {
     @Environment(\.pinLatestSpike) private var pinLatestSpike
 
     var body: some View {
-        let (label, color) = (s.pressureText, s.pressureLevel.color)
+        let (label, color) = (s.pressureText, s.memoryLevel.color)
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text("Memory").fontWeight(.medium)
-                if s.pressureLevel != .ok { Circle().fill(color).frame(width: 6, height: 6) }
+                if s.memoryLevel != .ok { Circle().fill(color).frame(width: 6, height: 6) }
                 Text(label).foregroundStyle(color)
                 Spacer()
                 Text(String(format: "%.1f of %.0f GB used", Double(s.memUsed) / 1_073_741_824,
@@ -274,7 +274,9 @@ struct MemoryLine: View {
                         .font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 }
             }
-            if s.pressureLevel != .ok && s.diskLevel != .ok {
+            if let p = s.pagingShown { PagingLine(p: p) }
+            if s.paging?.spotlightPaging == true { SpotlightHint(s: s) }
+            if s.memoryLevel != .ok && s.diskLevel != .ok {
                 Text("Swap lives on the disk and can't grow while it's this full. Freeing disk space helps memory too.")
                     .font(.caption).foregroundStyle(.orange)
             }
@@ -494,6 +496,8 @@ struct Chore: Identifiable {
         case worktrees([WorktreeUnit])
         case simRuntime(SimRuntime, SimStorage)
         case simUnavailable([SimDevice])
+        case agent(CrashLoop)
+        case log(RunawayLog)
     }
     let id: String
     let icon: String
@@ -503,8 +507,14 @@ struct Chore: Identifiable {
     let kind: Kind
     let kb: Int64
     var help: String? = nil
-    /// Runtimes are a re-download, so Clean all leaves them to be deleted one by one.
-    var inCleanAll: Bool { if case .simRuntime = kind { return false }; return true }
+    /// Runtimes are a re-download, and stopping a service or emptying its log loses something you may
+    /// want first (the log says why it crashed), so Clean all leaves those to be done one by one.
+    var inCleanAll: Bool {
+        switch kind {
+        case .simRuntime, .agent, .log: return false
+        default: return true
+        }
+    }
 }
 
 extension Snapshot {
@@ -527,13 +537,13 @@ extension Snapshot {
             }
         }
         for p in procs where p.stale {
-            let why = p.ppid == 1 ? "parent exited" : "folder gone"
+            let why = p.orphaned ? "parent is gone" : p.ppid == 1 ? "parent exited" : "folder gone"
             let kind = ProcessFold.kindName[p.kind] ?? p.name
             let place = p.cwd.split(separator: "/").suffix(2).joined(separator: "/")
             out.append(Chore(id: "kill-\(p.pid)", icon: "bolt.horizontal", title: place.isEmpty ? kind : place,
-                             subtitle: "\(kind) · stale · \(human(bytes: Int64(p.rssBytes)))",
+                             subtitle: "\(kind) · \(p.orphaned ? "orphaned" : "stale") · \(human(bytes: Int64(p.footprintBytes)))",
                              button: "Kill", kind: .process(p), kb: 0,
-                             help: "Stale because its \(why). Killing it frees \(human(bytes: Int64(p.rssBytes))) of memory."))
+                             help: "Stale because its \(why). Killing it frees \(human(bytes: Int64(p.footprintBytes))) of memory."))
         }
         for l in ports where l.folderGone && l.stoppable {
             out.append(Chore(id: "port-\(l.pid)", icon: "network.slash", title: "Port \(l.portList): \(l.kind)",
@@ -570,6 +580,19 @@ extension Snapshot {
                                  button: "Shut down", kind: .simulators(rest), kb: 0,
                                  help: includeBuilding ? nil : all.buildingNote))
             }
+        }
+        for loop in crashLoops {
+            out.append(Chore(id: "agent-\(loop.label)", icon: "arrow.triangle.2.circlepath",
+                             title: loop.brewService.map { "\($0) (brew service)" } ?? loop.label,
+                             subtitle: "Crash-looping · \(loop.subtitle)", button: "Stop", kind: .agent(loop), kb: 0,
+                             help: "Its last run failed and launchd keeps starting it again. Stop runs: \(loop.fixCommand)"))
+        }
+        for log in runawayLogs {
+            out.append(Chore(id: "log-\(log.path)", icon: "doc.text", title: (log.path as NSString).lastPathComponent,
+                             subtitle: "Log growing \(log.estimated ? "≈" : "")\(human(bytes: Int64(log.mbPerDay * 1_048_576)))/day · \(human(bytes: log.bytes))",
+                             button: "Empty", kind: .log(log), kb: log.bytes / 1024,
+                             help: Paths.abbreviate(log.path) + (log.agent.map { "\nWritten by \($0)" } ?? "")
+                                + "\nEmptied in place; whatever writes to it carries on."))
         }
         if let st = simStorage {
             let gone = st.unavailable
@@ -675,6 +698,16 @@ struct ChoresBlock: View {
             m.act(c.id, confirm: r.deleteConfirm(st)) { SimActions.deleteRuntime(r) }
         case .simUnavailable(let list):
             m.act(c.id, confirm: unavailableConfirm(list)) { SimActions.deleteUnavailable() }
+        case .agent(let loop):
+            m.act(c.id, confirm: .init(title: "Stop \(loop.brewService ?? loop.label)?",
+                                       message: "Runs \(loop.fixCommand). "
+                                           + (loop.brewService == nil ? "It stays stopped until you log in again." : "Start it again with brew services start once it's fixed."),
+                                       button: "Stop")) { BackgroundActions.stop(loop) }
+        case .log(let log):
+            let allowed = RunawayLogs.dirs(s.config)
+            m.act(c.id, confirm: .init(title: "Empty \((log.path as NSString).lastPathComponent)?",
+                                       message: "\(human(bytes: log.bytes)) of log lines are deleted. Read the end of it first if you want to know why it grew.",
+                                       button: "Empty")) { BackgroundActions.truncate(log, allowed: allowed) }
         }
     }
 
@@ -689,7 +722,7 @@ struct ChoresBlock: View {
             case .port(let l): servers.append(l)
             case .worktrees(let list): trees += list
             case .simUnavailable(let list): unavailable += list
-            case .simRuntime: break
+            case .simRuntime, .agent, .log: break
             }
         }
         var parts: [String] = []
@@ -989,7 +1022,7 @@ struct ProcessFold: View {
         let mcp = s.procs.filter { $0.kind == "mcp" }
         let mcpPids = Set(mcp.map(\.pid))
         let others = s.procs.filter { $0.kind != "mcp" && !mcpPids.contains($0.ppid) }
-        let total = s.procs.reduce(UInt64(0)) { $0 + $1.rssBytes }
+        let total = s.procs.reduce(UInt64(0)) { $0 + $1.footprintBytes }
 
         Fold("Dev processes", icon: "cpu", value: "\(s.procs.count) · \(human(bytes: Int64(total)))",
              attention: s.procs.contains(where: \.stale)) {
@@ -998,10 +1031,10 @@ struct ProcessFold: View {
             }
             ForEach(mcp) { p in
                 let kids = s.procs.filter { $0.ppid == p.pid }
-                let size = p.rssBytes + kids.reduce(0) { $0 + $1.rssBytes }
+                let size = p.footprintBytes + kids.reduce(0) { $0 + $1.footprintBytes }
                 let newest = mcp.count > 1 && p.pid == mcp.max(by: { $0.started < $1.started })?.pid
                 let owner = p.stale ? "session gone" : (p.session ?? "")
-                let tags = (p.stale ? ["stale"] : []) + (p.idleTag.map { [$0] } ?? []) + (newest ? ["newest"] : [])
+                let tags = (p.stale ? [p.staleTag] : []) + (p.idleTag.map { [$0] } ?? []) + (newest ? ["newest"] : [])
                 ItemRow(title: kids.isEmpty ? "\(p.name) MCP server" : "\(p.name) MCP + language server",
                         subtitle: [owner, "up \(p.uptime)", human(bytes: Int64(size))].filter { !$0.isEmpty }.joined(separator: " · "),
                         tags: tags, help: idleHelp(p)) { hovering in
@@ -1010,11 +1043,13 @@ struct ProcessFold: View {
             }
             ForEach(others) { p in
                 ItemRow(title: p.cwd.isEmpty ? p.name : p.cwd.split(separator: "/").suffix(2).joined(separator: "/"),
-                        subtitle: "\(Self.kindName[p.kind] ?? p.kind) · up \(p.uptime) · \(human(bytes: Int64(p.rssBytes)))",
-                        tags: p.stale ? ["stale"] : [], help: "pid \(p.pid) · \(Paths.abbreviate(p.cwd))") { hovering in
+                        subtitle: "\(Self.kindName[p.kind] ?? p.kind) · up \(p.uptime) · \(human(bytes: Int64(p.footprintBytes)))",
+                        tags: p.stale ? [p.staleTag] : [], help: "pid \(p.pid) · \(Paths.abbreviate(p.cwd))") { hovering in
                     ProcessAction(p: p, s: s, visible: hovering)
                 }
             }
+            let fanout = MCPFanoutRows.shown(s)
+            if !fanout.isEmpty { MCPFanoutRows(groups: fanout).padding(.top, 4) }
             MCPCleanupNote(s: s, mcp: mcp)
         }
     }
@@ -1084,7 +1119,7 @@ struct MCPCleanupNote: View {
             } else if mcp.count > 1 {
                 let older = Array(mcp.sorted { $0.started < $1.started }.dropLast())
                 let olderKids = s.procs.filter { p in older.contains { $0.pid == p.ppid } }
-                let freed = (olderKids + older).reduce(UInt64(0)) { $0 + $1.rssBytes }
+                let freed = (olderKids + older).reduce(UInt64(0)) { $0 + $1.footprintBytes }
                 Button("Stop all MCP servers but the newest · frees \(human(bytes: Int64(freed)))") {
                     m.act("kill-old-mcp", confirm: .init(
                         title: "Stop \(older.count) older MCP servers?",
@@ -1300,7 +1335,7 @@ struct MemoryUsersFold: View {
         let top = s.memUsers.first
         Fold("Memory users", icon: "memorychip",
              value: top.map { "\($0.name) \(human(bytes: Int64($0.bytes)))" } ?? "",
-             attention: s.pressureLevel != .ok) {
+             attention: s.memoryLevel != .ok) {
             ForEach(s.memUsers) { u in
                 let subtitle = "\(human(bytes: Int64(u.bytes))) · \(u.processes) process\(u.processes == 1 ? "" : "es")"
                 ItemRow(title: u.name, subtitle: subtitle, help: u.bundlePath.map(Paths.abbreviate)) { hovering in
