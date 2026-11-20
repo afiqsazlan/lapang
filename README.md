@@ -280,6 +280,8 @@ The section runs on every refresh, so keep it fast (well under a second).
 
 ## Development
 
+Lapang is a public package, so everything in it has to work on any developer's Mac. A feature built for one person's or one company's setup (their tunnel, their hostnames, their repo layout, their scripts) doesn't belong in the app. Make the general mechanism configurable, or keep the specific part in your own config and [custom sections](#custom-sections), which is what they're for.
+
 The app icon is drawn in code: `xcrun swift Support/make-icon.swift` regenerates `Support/AppIcon.icns` and `docs/icon.png`.
 
 `Lapang --render out.png` draws the full panel off-screen with live data and exits. It's useful for checking layout without clicking around the menu bar. Add `--demo` to use built-in sample data (including a sample action log), `--light` for the light appearance, and `--open "Simulators,Memory"` to show sections opened. `--pin-spike` shows the latest pressure spike's culprits as if its slice were clicked. `--window [page]` draws the window at its default size instead, on its overview or on a page such as `memory`, `worktrees`, `xcode` or `activity`. To try actions on throwaway targets, set `LAPANG_HOME` to another folder: Lapang then reads its config from there, keeps its data there and expands `~` to it. The README screenshot is made with:
